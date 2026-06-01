@@ -1,167 +1,67 @@
 """
-Оркестрация задач: генерация черновика для канала и публикация постов.
-Используется и планировщиком, и обработчиками API.
+Безопасность без внешних библиотек:
+  - пароли: PBKDF2-HMAC-SHA256 (stdlib hashlib)
+  - токены сессии: подписанные HMAC-SHA256 (как JWT, но без зависимостей)
 """
 
+import hashlib
+import hmac
+import os
 import json
-import logging
-from datetime import datetime
+import base64
+import time
 
 import config
-import generator
-import research
-import telegram_api
-from database import session, Channel, Source, Post, User
-from sqlmodel import select
 
-logger = logging.getLogger(__name__)
+_ALGO = "sha256"
+_ITER = 200_000
 
 
-async def generate_for_channel(channel_id: int) -> dict:
-    """
-    Генерирует один черновик поста для канала.
-    Списывает токены с владельца. Если auto_publish — сразу публикует.
-    Возвращает {ok, message, post_id?}.
-    """
-    with session() as s:
-        channel = s.get(Channel, channel_id)
-        if not channel:
-            return {"ok": False, "message": "Канал не найден"}
+# ── ПАРОЛИ ────────────────────────────────────────────────────
 
-        user = s.get(User, channel.user_id)
-        if not user:
-            return {"ok": False, "message": "Владелец не найден"}
+def hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac(_ALGO, password.encode(), salt, _ITER)
+    return f"{salt.hex()}${dk.hex()}"
 
-        if user.token_balance <= 0:
-            return {"ok": False, "message": "Закончились токены. Пополните баланс."}
 
-        sources = s.exec(
-            select(Source).where(Source.channel_id == channel_id, Source.enabled == True)  # noqa: E712
-        ).all()
-        source_urls = [src.url for src in sources]
-
-    # Качаем источники (вне сессии БД — это сетевые запросы)
-    material = ""
-    if source_urls:
-        try:
-            material = await research.fetch_sources(source_urls)
-        except Exception as e:
-            logger.warning(f"Ошибка сбора источников: {e}")
-
-    # Генерация
+def verify_password(password: str, stored: str) -> bool:
     try:
-        text, tokens = await generator.generate_post(channel, material)
-    except Exception as e:
-        logger.error(f"Ошибка генерации для канала {channel_id}: {e}")
-        return {"ok": False, "message": f"Ошибка генерации: {e}"}
-
-    # Сохраняем пост + списываем токены
-    with session() as s:
-        channel = s.get(Channel, channel_id)
-        user = s.get(User, channel.user_id)
-
-        post = Post(
-            channel_id=channel_id,
-            user_id=channel.user_id,
-            text=text,
-            tokens_used=tokens,
-            status="pending",
-        )
-
-        user.token_balance = max(0, user.token_balance - tokens)
-        channel.last_generated_at = datetime.utcnow()
-
-        if channel.auto_publish:
-            result = await telegram_api.send_message(channel.tg_chat, text)
-            if result.get("ok"):
-                post.status = "published"
-                post.published_at = datetime.utcnow()
-                post.tg_message_id = result["result"].get("message_id")
-            else:
-                # не смогли опубликовать — оставим на ревью
-                post.status = "pending"
-
-        s.add(post)
-        s.add(user)
-        s.add(channel)
-        s.commit()
-        s.refresh(post)
-        pid = post.id
-
-    return {"ok": True, "message": "Черновик создан", "post_id": pid, "tokens_used": tokens}
+        salt_hex, dk_hex = stored.split("$", 1)
+        salt = bytes.fromhex(salt_hex)
+        dk = hashlib.pbkdf2_hmac(_ALGO, password.encode(), salt, _ITER)
+        return hmac.compare_digest(dk.hex(), dk_hex)
+    except Exception:
+        return False
 
 
-async def publish_post(post_id: int) -> dict:
-    """Публикует конкретный пост в его канал прямо сейчас."""
-    with session() as s:
-        post = s.get(Post, post_id)
-        if not post:
-            return {"ok": False, "message": "Пост не найден"}
-        channel = s.get(Channel, post.channel_id)
-        text = post.text
-        chat = channel.tg_chat
+# ── ТОКЕНЫ СЕССИИ ─────────────────────────────────────────────
 
-    result = await telegram_api.send_message(chat, text)
-    if not result.get("ok"):
-        return {"ok": False, "message": f"Telegram отказал: {result.get('description')}"}
-
-    with session() as s:
-        post = s.get(Post, post_id)
-        post.status = "published"
-        post.published_at = datetime.utcnow()
-        post.tg_message_id = result["result"].get("message_id")
-        s.add(post)
-        s.commit()
-    return {"ok": True, "message": "Опубликовано"}
+def _b64(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
 
-def _is_due(channel: Channel, now: datetime) -> bool:
-    """Пора ли генерировать новый пост для канала."""
-    last = channel.last_generated_at
-
-    if channel.schedule_kind == "interval":
-        if last is None:
-            return True
-        hours = max(1, channel.interval_hours)
-        return (now - last).total_seconds() >= hours * 3600
-
-    if channel.schedule_kind == "daily":
-        try:
-            times = json.loads(channel.daily_times or "[]")
-        except Exception:
-            times = []
-        # генерируем, если сейчас попали в минуту одного из слотов
-        # и в этот слот сегодня ещё не генерировали
-        hhmm_now = now.strftime("%H:%M")
-        if hhmm_now in times:
-            if last is None:
-                return True
-            return not (last.date() == now.date() and last.strftime("%H:%M") == hhmm_now)
-    return False
+def _unb64(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
 
 
-async def tick():
-    """Один проход планировщика: генерация по расписанию + публикация отложенных."""
-    now = datetime.utcnow()
+def create_token(user_id: int, days_valid: int = 30) -> str:
+    payload = {"uid": user_id, "exp": int(time.time()) + days_valid * 86400}
+    body = _b64(json.dumps(payload).encode())
+    sig = _b64(hmac.new(config.SECRET_KEY.encode(), body.encode(), hashlib.sha256).digest())
+    return f"{body}.{sig}"
 
-    # 1) генерация по расписанию
-    with session() as s:
-        channels = s.exec(select(Channel).where(Channel.enabled == True)).all()  # noqa: E712
-        due_ids = [c.id for c in channels if c.verified and _is_due(c, now)]
 
-    for cid in due_ids:
-        try:
-            await generate_for_channel(cid)
-        except Exception as e:
-            logger.error(f"tick: ошибка генерации канала {cid}: {e}")
-
-    # 2) публикация запланированных постов, у которых наступило время
-    with session() as s:
-        from database import due_scheduled_posts
-        due_posts = [p.id for p in due_scheduled_posts(s, now)]
-
-    for pid in due_posts:
-        try:
-            await publish_post(pid)
-        except Exception as e:
-            logger.error(f"tick: ошибка публикации поста {pid}: {e}")
+def verify_token(token: str):
+    try:
+        body, sig = token.split(".", 1)
+        expected = _b64(hmac.new(config.SECRET_KEY.encode(), body.encode(), hashlib.sha256).digest())
+        if not hmac.compare_digest(sig, expected):
+            return None
+        payload = json.loads(_unb64(body))
+        if payload.get("exp", 0) < time.time():
+            return None
+        return payload.get("uid")
+    except Exception:
+        return None

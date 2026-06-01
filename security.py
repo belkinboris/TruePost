@@ -1,67 +1,59 @@
-"""
-Безопасность без внешних библиотек:
-  - пароли: PBKDF2-HMAC-SHA256 (stdlib hashlib)
-  - токены сессии: подписанные HMAC-SHA256 (как JWT, но без зависимостей)
-"""
+"""Pydantic-схемы запросов/ответов."""
 
-import hashlib
-import hmac
-import os
-import json
-import base64
-import time
-
-import config
-
-_ALGO = "sha256"
-_ITER = 200_000
+from typing import Optional
+from pydantic import BaseModel
 
 
-# ── ПАРОЛИ ────────────────────────────────────────────────────
-
-def hash_password(password: str) -> str:
-    salt = os.urandom(16)
-    dk = hashlib.pbkdf2_hmac(_ALGO, password.encode(), salt, _ITER)
-    return f"{salt.hex()}${dk.hex()}"
+class AuthIn(BaseModel):
+    email: str
+    password: str
 
 
-def verify_password(password: str, stored: str) -> bool:
-    try:
-        salt_hex, dk_hex = stored.split("$", 1)
-        salt = bytes.fromhex(salt_hex)
-        dk = hashlib.pbkdf2_hmac(_ALGO, password.encode(), salt, _ITER)
-        return hmac.compare_digest(dk.hex(), dk_hex)
-    except Exception:
-        return False
+class ChannelIn(BaseModel):
+    title: str
+    tg_chat: str = ""
+    about: str = ""
+    style: str = ""
+    post_length: str = "100-200 слов"
+    language: str = "русский"
+    use_web_search: bool = True
+    auto_publish: bool = False
+    schedule_kind: str = "interval"
+    interval_hours: int = 12
+    daily_times: list[str] = ["10:00"]
+    enabled: bool = True
 
 
-# ── ТОКЕНЫ СЕССИИ ─────────────────────────────────────────────
-
-def _b64(data: bytes) -> str:
-    return base64.urlsafe_b64encode(data).decode().rstrip("=")
-
-
-def _unb64(s: str) -> bytes:
-    pad = "=" * (-len(s) % 4)
-    return base64.urlsafe_b64decode(s + pad)
-
-
-def create_token(user_id: int, days_valid: int = 30) -> str:
-    payload = {"uid": user_id, "exp": int(time.time()) + days_valid * 86400}
-    body = _b64(json.dumps(payload).encode())
-    sig = _b64(hmac.new(config.SECRET_KEY.encode(), body.encode(), hashlib.sha256).digest())
-    return f"{body}.{sig}"
+class ChannelPatch(BaseModel):
+    title: Optional[str] = None
+    tg_chat: Optional[str] = None
+    about: Optional[str] = None
+    style: Optional[str] = None
+    post_length: Optional[str] = None
+    language: Optional[str] = None
+    use_web_search: Optional[bool] = None
+    auto_publish: Optional[bool] = None
+    schedule_kind: Optional[str] = None
+    interval_hours: Optional[int] = None
+    daily_times: Optional[list[str]] = None
+    enabled: Optional[bool] = None
 
 
-def verify_token(token: str):
-    try:
-        body, sig = token.split(".", 1)
-        expected = _b64(hmac.new(config.SECRET_KEY.encode(), body.encode(), hashlib.sha256).digest())
-        if not hmac.compare_digest(sig, expected):
-            return None
-        payload = json.loads(_unb64(body))
-        if payload.get("exp", 0) < time.time():
-            return None
-        return payload.get("uid")
-    except Exception:
-        return None
+class SourceIn(BaseModel):
+    url: str
+
+
+class AnalyzeIn(BaseModel):
+    link: str
+
+
+class PostPatch(BaseModel):
+    text: str
+
+
+class ScheduleIn(BaseModel):
+    scheduled_at: str   # ISO 8601, например "2025-06-02T10:00:00"
+
+
+class BuyIn(BaseModel):
+    package_id: str
