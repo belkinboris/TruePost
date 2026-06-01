@@ -455,12 +455,12 @@ async def yoomoney_notify(request: Request):
 
 
 # ── РАЗДАЧА САЙТА ─────────────────────────────────────────────
-# Весь сайт собран в один файл index.html (стили и скрипты внутри),
-# поэтому подпапка static не нужна — отдаём файл из корня проекта.
 
 @app.get("/")
 def index():
-    return FileResponse("index.html")
+    return FileResponse("static/index.html")
+
+app.mount("/", StaticFiles(directory="static", html=True), name="static")
 
 
 # ── ЗАПУСК ────────────────────────────────────────────────────
