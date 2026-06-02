@@ -33,11 +33,32 @@ def _extract_text(data: dict) -> str:
 
 def _usage_tokens(data: dict) -> int:
     u = data.get("usage", {})
-    total = int(u.get("input_tokens", 0)) + int(u.get("output_tokens", 0))
-    return total
+    return int(u.get("input_tokens", 0)) + int(u.get("output_tokens", 0))
 
 
-async def _call_claude(system: str, user: str, use_web_search: bool, max_tokens: int = 1500) -> tuple[str, int]:
+def _clean_post(text: str) -> str:
+    """Убираем мусор который Claude иногда добавляет перед постом."""
+    text = text.strip()
+    # Убираем вступления типа "Пишу пост...", "Отличные данные...", "Вот пост:"
+    trash_patterns = [
+        r"^(Отличные данные\.?|Пишу пост[^.]*\.|Вот пост:|Готово!|Конечно[,!]?)[^\n]*\n+",
+        r"^---\n+",
+    ]
+    for p in trash_patterns:
+        text = re.sub(p, "", text, flags=re.IGNORECASE).strip()
+    # Убираем обёртку в кавычки
+    if text.startswith('"') and text.endswith('"'):
+        text = text[1:-1].strip()
+    # Схлопываем тройные+ переносы строк в двойные
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Убираем пробелы перед переносом строки
+    text = re.sub(r" +\n", "\n", text)
+    return text.strip()
+
+
+async def _call_claude(
+    system: str, user: str, use_web_search: bool, max_tokens: int = 800
+) -> tuple[str, int]:
     body = {
         "model": config.ANTHROPIC_MODEL,
         "max_tokens": max_tokens,
@@ -45,7 +66,8 @@ async def _call_claude(system: str, user: str, use_web_search: bool, max_tokens:
         "messages": [{"role": "user", "content": user}],
     }
     if use_web_search:
-        body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]
+        # max_uses=2 вместо 5 — экономим токены
+        body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}]
 
     async with httpx.AsyncClient(timeout=120) as client:
         r = await client.post(ANTHROPIC_URL, headers=_headers(), json=body)
@@ -64,61 +86,67 @@ async def generate_post(channel: Channel, source_material: str = "") -> tuple[st
     Создаёт один пост для канала.
     Возвращает (текст_поста, использовано_токенов).
     """
-    style_block = channel.style or "Информативно, по делу, профессионально."
+    style_block = channel.style or "живо, по делу, без воды"
     if channel.style_profile:
-        style_block += f"\n\nПрофиль стиля (выведен из примеров постов канала):\n{channel.style_profile}"
+        style_block += f"\n\nПрофиль стиля канала:\n{channel.style_profile}"
 
-    system = f"""Ты — главный редактор Telegram-канала. Пишешь готовые к публикации посты.
+    system = f"""Ты — автор Telegram-канала «{channel.title}».
 
-КАНАЛ: {channel.title}
-ТЕМАТИКА: {channel.about}
+О КАНАЛЕ: {channel.about}
 СТИЛЬ: {style_block}
 ЯЗЫК: {channel.language}
 ДЛИНА: {channel.post_length}
 
-ПРАВИЛА:
-- Верни ТОЛЬКО текст поста, без пояснений, без вариантов, без кавычек вокруг.
-- Не выдумывай факты. Если используешь данные из источников — опирайся на них.
-- Telegram поддерживает HTML: <b>жирный</b>, <i>курсив</i>, <a href="">ссылки</a>. Используй умеренно.
-- Без хэштегов, если стиль не требует.
-- Пиши живым языком, не канцелярит."""
+ГЛАВНОЕ ПРАВИЛО — ЖАНР:
+Внимательно прочитай описание канала и определи жанр поста:
+- Если канал про людей, образ жизни, истории — пиши как живую историю про конкретного человека или момент. Читатель должен почувствовать этот мир изнутри.
+- Если канал про новости, аналитику — пиши чётко, фактурно, без воды.
+- Если про бизнес, сделки — пиши как инсайдер, который знает детали.
+Никогда не подменяй жанр: lifestyle-канал не должен превращаться в аналитический отчёт.
 
-    user = "Напиши новый пост для канала."
+СТРОГИЕ ЗАПРЕТЫ:
+- НЕ пиши вступлений типа «Пишу пост», «Отличные данные», «Вот пост:» — сразу текст
+- НЕ используй тире в начале строк (— вот так — запрещено)
+- НЕ делай двойные пустые строки между абзацами — только одна пустая строка
+- НЕ пиши как аналитический доклад или новостная статья если канал про стиль жизни
+- НЕ используй слова: «волатильность», «ликвидность», «family office», «кондоминиум» в lifestyle-канале
+- Без хэштегов (если стиль не требует)
+- Верни ТОЛЬКО текст поста, ничего больше"""
+
+    user = "Напиши один пост для канала."
+
     if source_material:
         user += (
-            "\n\nВот свежий материал из заданных источников — используй актуальные факты отсюда, "
-            "выбери самое важное и интересное для подписчиков:\n\n" + source_material[:12000]
+            "\n\nИспользуй эти материалы как источник фактов — "
+            "выбери самое интересное, но пиши в жанре канала, не пересказывай источник:\n\n"
+            + source_material[:6000]  # было 12000 — режем вдвое
         )
+    elif channel.use_web_search:
+        user += " Найди один свежий и конкретный факт или историю по теме канала и напиши пост."
     else:
-        user += " Найди свежую и релевантную информацию по тематике канала."
+        user += " Напиши пост по теме канала."
 
-    text, tokens = await _call_claude(system, user, channel.use_web_search)
-
-    # Чистим возможные обёртки-кавычки
-    text = text.strip()
-    if text.startswith('"') and text.endswith('"') and text.count('"') == 2:
-        text = text[1:-1].strip()
-    return text, tokens
+    text, tokens = await _call_claude(system, user, channel.use_web_search, max_tokens=600)
+    return _clean_post(text), tokens
 
 
 # ── АНАЛИЗ СТИЛЯ ЧУЖОГО КАНАЛА ───────────────────────────────
 
 async def analyze_style(posts: list[str]) -> tuple[str, int]:
     """
-    По набору постов выводит компактный «профиль стиля»,
-    который потом подмешивается в генерацию.
+    По набору постов выводит компактный профиль стиля.
     """
     if not posts:
         return "", 0
 
-    sample = "\n\n---\n\n".join(posts[:20])[:12000]
+    sample = "\n\n---\n\n".join(posts[:15])[:8000]  # было 20 постов / 12000 символов
     system = (
-        "Ты — аналитик контента. По примерам постов канала опиши его стиль так, "
-        "чтобы другой автор смог писать неотличимо похоже."
+        "Ты — аналитик контента. По примерам постов опиши стиль коротко и точно — "
+        "чтобы другой автор сразу понял как писать."
     )
     user = (
-        "Проанализируй посты ниже и составь профиль стиля (8–12 пунктов): тон, длина, "
-        "структура, форматирование, эмодзи, типичные обороты, как начинаются и заканчиваются посты, "
-        "обращение к аудитории. Только профиль, без пересказа постов.\n\n" + sample
+        "Составь профиль стиля канала (6–8 пунктов): тон, длина, структура, "
+        "форматирование, с чего начинаются посты, чем заканчиваются. "
+        "Только профиль — кратко, без примеров.\n\n" + sample
     )
-    return await _call_claude(system, user, use_web_search=False, max_tokens=900)
+    return await _call_claude(system, user, use_web_search=False, max_tokens=400)
