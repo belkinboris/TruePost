@@ -1,5 +1,3 @@
-"""Pydantic-схемы запросов/ответов."""
-
 from typing import Optional
 from pydantic import BaseModel
 
@@ -16,6 +14,11 @@ class ChannelIn(BaseModel):
     style: str = ""
     post_length: str = "100-200 слов"
     language: str = "русский"
+    post_voice: str = "author"
+    post_format: str = "story"
+    emoji_style: str = "minimal"
+    cta_enabled: bool = False
+    cta_text: str = ""
     use_web_search: bool = True
     auto_publish: bool = False
     schedule_kind: str = "interval"
@@ -31,6 +34,11 @@ class ChannelPatch(BaseModel):
     style: Optional[str] = None
     post_length: Optional[str] = None
     language: Optional[str] = None
+    post_voice: Optional[str] = None
+    post_format: Optional[str] = None
+    emoji_style: Optional[str] = None
+    cta_enabled: Optional[bool] = None
+    cta_text: Optional[str] = None
     use_web_search: Optional[bool] = None
     auto_publish: Optional[bool] = None
     schedule_kind: Optional[str] = None
@@ -47,12 +55,16 @@ class AnalyzeIn(BaseModel):
     link: str
 
 
+class PostIn(BaseModel):
+    topic: str = ""   # необязательная тема конкретного поста
+
+
 class PostPatch(BaseModel):
     text: str
 
 
 class ScheduleIn(BaseModel):
-    scheduled_at: str   # ISO 8601, например "2025-06-02T10:00:00"
+    scheduled_at: str
 
 
 class BuyIn(BaseModel):
