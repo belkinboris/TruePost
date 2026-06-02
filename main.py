@@ -455,12 +455,14 @@ async def yoomoney_notify(request: Request):
 
 
 # ── РАЗДАЧА САЙТА ─────────────────────────────────────────────
+# index.html лежит в папке static/, styles.css и app.js — в корне.
+# StaticFiles раздаёт корень проекта, index.html берём из static/.
 
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
 
-app.mount("/", StaticFiles(directory="static", html=True), name="static")
+app.mount("/", StaticFiles(directory=".", html=False), name="root")
 
 
 # ── ЗАПУСК ────────────────────────────────────────────────────
