@@ -166,14 +166,16 @@ async function renderChannel() {
   let c;
   try { c = await api("GET", "/channels/" + App.channelId); }
   catch (e) { toast(e.message, "err"); return go("dashboard"); }
+  const wasSaved = App._chan && App._chan._saved;
   App._chan = c;
+  if (wasSaved) App._chan._saved = true;
 
   $("app").innerHTML = topbar() + `<div class="wrap">
     <div class="back" onclick="go('dashboard')">← все каналы</div>
     <div class="page-head row between">
       <div><h1>${esc(c.title)}</h1>
         <p>${esc(c.tg_chat || "канал ещё не подключён")}</p></div>
-      <button class="btn" id="genBtn" onclick="generateNow()">✦ Сгенерировать пост</button>
+      ${App._chan._saved ? `<button class="btn" id="genBtn" onclick="generateNow()">✦ Сгенерировать пост</button>` : ""}
     </div>
     <div class="tabs">
       <button class="tab ${App.tab==='settings'?'active':''}" onclick="setTab('settings')">Настройки</button>
@@ -213,9 +215,21 @@ function renderSettings() {
     <div class="card">
       <div class="card-title">О чём канал</div>
       <label class="field"><span class="label">Тема канала</span>
-        <textarea id="f_about" placeholder="Например: новости и сделки M&A на российском рынке — крупные слияния, поглощения, продажи активов, с кратким разбором смысла сделки">${esc(c.about)}</textarea></label>
+        <textarea id="f_about" placeholder="Опишите идею канала своими словами — о чём он, про каких людей или события, что интересно вашей аудитории">${esc(c.about)}</textarea>
+        <div class="hint">
+          <b>Примеры:</b><br>
+          · <i>Канал про богатых людей: как они живут, куда ездят, что покупают, какие сделки делают — истории про конкретных людей с деталями</i><br>
+          · <i>Новости M&A в России: крупные слияния и поглощения, кто купил кого и зачем, разбор сделки простым языком</i><br>
+          · <i>Крипта без воды: только важные движения рынка, инсайды и реальные сделки топ-игроков</i>
+        </div>
       <label class="field"><span class="label">Стиль и тон</span>
-        <textarea id="f_style" placeholder="Например: деловой, лаконичный, без воды; каждый пост — суть сделки + почему это важно; допустимы 1-2 эмодзи">${esc(c.style)}</textarea></label>
+        <textarea id="f_style" placeholder="Опишите тон и атмосферу: как вы хотите звучать, что должен почувствовать читатель">${esc(c.style)}</textarea>
+        <div class="hint">
+          <b>Примеры:</b><br>
+          · <i>Красиво и атмосферно — читатель должен захотеть жить так же. Без статистики, без аналитики, только образы и детали</i><br>
+          · <i>Деловой инсайдер: коротко, фактурно, с выводом. Как будто рассказываешь другу за кофе</i><br>
+          · <i>Дерзко и прямо — называем вещи своими именами, без корпоративного языка</i>
+        </div>
       <label class="field"><span class="label">Длина поста</span>
         <div class="seg" id="seg_len">${lenOpts.map(o=>`<button class="${c.post_length===o?'on':''}" onclick="pickLen('${o}')">${o}</button>`).join("")}</div></label>
 
@@ -286,6 +300,7 @@ async function saveChannel() {
   try {
     await api("PATCH", "/channels/" + c.id, payload);
     toast("Сохранено", "ok");
+    App._chan._saved = true;
     renderChannel();
   } catch (e) { toast(e.message, "err"); }
 }
@@ -436,14 +451,66 @@ async function regen(id) {
 }
 
 async function generateNow(silent) {
+  // Проверяем что тематика заполнена
+  const aboutVal = ($("f_about") ? $("f_about").value : App._chan.about || "").trim();
+  if (!aboutVal) {
+    toast("Сначала заполните поле «О чём канал» и сохраните настройки", "err");
+    return;
+  }
+
   const btn = $("genBtn");
   if (btn) btn.innerHTML = '<span class="spinner"></span> генерирую…';
+
+  // Автосохраняем форму перед генерацией — данные не потеряются при ошибке
+  await _silentSave();
+
+  let attempts = 0;
+  while (attempts < 3) {
+    try {
+      const r = await api("POST", "/channels/" + App._chan.id + "/generate");
+      if (!silent) toast(`Готово! Списано ${fmt(r.tokens_used)} токенов`, "ok");
+      App.tab = "drafts";
+      renderChannel();
+      return;
+    } catch (e) {
+      const is529 = e.message.includes("529") || e.message.toLowerCase().includes("overload");
+      attempts++;
+      if (is529 && attempts < 3) {
+        toast(`Серверы Anthropic заняты, повтор через 15 сек… (попытка ${attempts}/3)`, "");
+        await new Promise(res => setTimeout(res, 15000));
+        if (btn) btn.innerHTML = '<span class="spinner"></span> повтор…';
+      } else {
+        toast(is529
+          ? "Серверы Anthropic временно перегружены. Попробуй через минуту."
+          : e.message, "err");
+        if (btn) btn.innerHTML = "✦ Сгенерировать пост";
+        return;
+      }
+    }
+  }
+}
+
+// Сохраняет значения формы в БД без перерисовки страницы
+async function _silentSave() {
+  if (App.tab !== "settings") return;
+  if (!$("f_title")) return;
   try {
-    const r = await api("POST", "/channels/" + App._chan.id + "/generate");
-    if (!silent) toast(`Готово! Списано ${fmt(r.tokens_used)} токенов`, "ok");
-    App.tab = "drafts";
-    renderChannel();
-  } catch (e) { toast(e.message, "err"); if (btn) btn.innerHTML = "✦ Сгенерировать пост"; }
+    const times = ($("f_times") ? $("f_times").value : "").split(",").map(s => s.trim()).filter(Boolean);
+    const payload = {
+      title: $("f_title").value.trim() || "Без названия",
+      tg_chat: $("f_chat") ? $("f_chat").value.trim() : App._chan.tg_chat,
+      about: $("f_about") ? $("f_about").value : App._chan.about,
+      style: $("f_style") ? $("f_style").value : App._chan.style,
+      post_length: App._chan.post_length,
+      schedule_kind: App._chan.schedule_kind,
+      interval_hours: parseInt($("f_interval") ? $("f_interval").value : App._chan.interval_hours),
+      daily_times: times.length ? times : (App._chan.daily_times || ["10:00"]),
+      use_web_search: $("t_web") ? $("t_web").classList.contains("on") : App._chan.use_web_search,
+      auto_publish: $("t_auto") ? $("t_auto").classList.contains("on") : App._chan.auto_publish,
+    };
+    const updated = await api("PATCH", "/channels/" + App._chan.id, payload);
+    App._chan = { ...App._chan, ...updated };
+  } catch (_) { /* молча игнорируем — не мешаем генерации */ }
 }
 
 // ── BILLING ───────────────────────────────────────────────
