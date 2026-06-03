@@ -5,6 +5,7 @@ from pydantic import BaseModel
 class AuthIn(BaseModel):
     email: str
     password: str
+    ref_code: str = ""
 
 
 class ChannelIn(BaseModel):
@@ -12,6 +13,7 @@ class ChannelIn(BaseModel):
     tg_chat: str = ""
     about: str = ""
     style: str = ""
+    style_profile: str = ""
     post_length: str = "100-200 слов"
     language: str = "русский"
     post_voice: str = "author"
@@ -25,6 +27,7 @@ class ChannelIn(BaseModel):
     interval_hours: int = 12
     daily_times: list[str] = ["10:00"]
     enabled: bool = True
+    onboarded: bool = False
 
 
 class ChannelPatch(BaseModel):
@@ -32,6 +35,7 @@ class ChannelPatch(BaseModel):
     tg_chat: Optional[str] = None
     about: Optional[str] = None
     style: Optional[str] = None
+    style_profile: Optional[str] = None
     post_length: Optional[str] = None
     language: Optional[str] = None
     post_voice: Optional[str] = None
@@ -45,6 +49,7 @@ class ChannelPatch(BaseModel):
     interval_hours: Optional[int] = None
     daily_times: Optional[list[str]] = None
     enabled: Optional[bool] = None
+    onboarded: Optional[bool] = None
 
 
 class SourceIn(BaseModel):
@@ -55,8 +60,16 @@ class AnalyzeIn(BaseModel):
     link: str
 
 
+class AnalyzeStyleOnly(BaseModel):
+    link: str
+
+
+class GenerateFormatIn(BaseModel):
+    post_format: str = "story"
+
+
 class PostIn(BaseModel):
-    topic: str = ""   # необязательная тема конкретного поста
+    topic: str = ""
 
 
 class PostPatch(BaseModel):

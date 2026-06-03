@@ -1,12 +1,11 @@
 """
-База данных: SQLModel поверх SQLAlchemy.
+База данных: SQLModel + SQLAlchemy.
 Postgres (Railway) или SQLite (локально).
 """
 
 from datetime import datetime
 from typing import Optional
 from sqlmodel import Field, SQLModel, create_engine, Session, select
-
 import config
 
 db_url = config.DATABASE_URL
@@ -23,6 +22,14 @@ class User(SQLModel, table=True):
     password_hash: str
     token_balance: int = 0
     is_admin: bool = False
+    # Подписка
+    plan: str = "free"               # free | starter | pro | business | agency
+    plan_posts_used: int = 0         # постов использовано в этом месяце
+    plan_reset_at: Optional[datetime] = None
+    # Реферальная программа
+    ref_code: str = ""               # уникальный реферальный код пользователя
+    referred_by: Optional[int] = Field(default=None, foreign_key="user.id")
+    ref_bonus_given: bool = False    # получил ли бонус за реферала
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -34,29 +41,28 @@ class Channel(SQLModel, table=True):
     tg_chat: str = ""
     verified: bool = False
 
-    # Основные настройки
     about: str = ""
     style: str = ""
     style_profile: str = ""
     post_length: str = "100-200 слов"
     language: str = "русский"
 
-    # Расширенные настройки (новые)
-    post_voice: str = "author"        # author = от первого лица, news = сухие новости, expert = как эксперт
-    post_format: str = "story"        # story = история, tips = советы, news = новость, question = пост-вопрос
-    emoji_style: str = "minimal"      # none = без эмодзи, minimal = 1-2, rich = много
-    cta_enabled: bool = False         # добавлять призыв к действию в конце
-    cta_text: str = ""                # текст призыва (подписаться, писать в лс и т.д.)
+    # Расширенные настройки
+    post_voice: str = "author"
+    post_format: str = "story"
+    emoji_style: str = "minimal"
+    cta_enabled: bool = False
+    cta_text: str = ""
 
     use_web_search: bool = True
     auto_publish: bool = False
 
-    # Расписание
     schedule_kind: str = "interval"
     interval_hours: int = 12
     daily_times: str = '["10:00"]'
 
     enabled: bool = True
+    onboarded: bool = False          # прошёл ли онбординг (выбрал первый пост)
     last_generated_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -74,11 +80,12 @@ class Post(SQLModel, table=True):
     user_id: int = Field(foreign_key="user.id", index=True)
 
     text: str
-    status: str = "pending"
+    status: str = "pending"         # pending|scheduled|published|rejected|onboarding
     scheduled_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
     tg_message_id: Optional[int] = None
     tokens_used: int = 0
+    post_format: str = ""            # формат поста (для онбординга)
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -95,6 +102,14 @@ class Payment(SQLModel, table=True):
     paid_at: Optional[datetime] = None
 
 
+class Referral(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    referrer_id: int = Field(foreign_key="user.id", index=True)
+    referred_id: int = Field(foreign_key="user.id")
+    bonus_tokens: int = 0
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 def init_db():
     SQLModel.metadata.create_all(engine)
 
@@ -103,16 +118,8 @@ def session():
     return Session(engine)
 
 
-def get_user_by_email(s: Session, email: str) -> Optional[User]:
-    return s.exec(select(User).where(User.email == email)).first()
-
-
-def get_user(s: Session, user_id: int) -> Optional[User]:
-    return s.get(User, user_id)
-
-
 def all_enabled_channels(s: Session) -> list[Channel]:
-    return list(s.exec(select(Channel).where(Channel.enabled == True)).all())  # noqa: E712
+    return list(s.exec(select(Channel).where(Channel.enabled == True)).all())  # noqa
 
 
 def due_scheduled_posts(s: Session, now: datetime) -> list[Post]:

@@ -1,6 +1,5 @@
 """
 Генерация постов и анализ стиля через Claude API.
-Поддерживает: голос, формат, эмодзи, CTA, тему поста.
 """
 
 import re
@@ -30,6 +29,27 @@ EMOJI_MAP = {
     "rich":    "эмодзи активно — для акцентов, заголовков, списков",
 }
 
+# Строки-монологи Claude которые не должны попасть в пост
+_TRASH_PATTERNS = [
+    r"Отличн\w+.{0,100}",
+    r"Пишу пост.*",
+    r"Вот пост.*",
+    r"Готово[!.]?",
+    r"Конечно[,!\s].*",
+    r"Дай мне.*",
+    r"Сейчас.{0,40}",
+    r"Есть всё.*",
+    r"Нашёл.*",
+    r"Ищу.*",
+    r"Смотрю.*",
+    r"Тема:\s*.*",
+    r"[-\u2014\u2013]{1,3}",   # одиночные тире как разделители
+]
+_TRASH_RE = re.compile(
+    r"^(" + "|".join(_TRASH_PATTERNS) + r")\s*$",
+    re.IGNORECASE
+)
+
 
 def _headers() -> dict:
     return {
@@ -53,20 +73,32 @@ def _usage_tokens(data: dict) -> int:
 
 
 def _clean_post(text: str) -> str:
+    """Убирает строки-монологи Claude с начала поста."""
     text = text.strip()
-    text = re.sub(
-        r"^(Отличн\w+\s[^.!?\n]{0,80}[.!?]\s*|Пишу пост[^.!?\n]*[.!?]\s*|"
-        r"Вот пост[^:]*:\s*|Готово[!.]?\s*|---\s*|Конечно[,!]?\s*)",
-        "", text, flags=re.IGNORECASE
-    ).strip()
+
+    post_lines = text.split("\n")
+    # Удаляем мусорные строки и пустые строки с начала
+    while post_lines and (
+        not post_lines[0].strip()
+        or _TRASH_RE.match(post_lines[0].strip())
+    ):
+        post_lines.pop(0)
+
+    text = "\n".join(post_lines).strip()
+
+    # Убираем кавычки-обёртку
     if text.startswith('"') and text.endswith('"'):
         text = text[1:-1].strip()
+
+    # Схлопываем тройные переносы
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r" +\n", "\n", text)
     return text.strip()
 
 
-async def _call_claude(system, user, use_web_search, max_tokens=700):
+async def _call_claude(
+    system: str, user: str, use_web_search: bool, max_tokens: int = 700
+) -> tuple[str, int]:
     body = {
         "model": config.ANTHROPIC_MODEL,
         "max_tokens": max_tokens,
@@ -86,6 +118,7 @@ async def _call_claude(system, user, use_web_search, max_tokens=700):
 
 
 async def generate_post(channel: Channel, source_material: str = "", topic: str = "") -> tuple[str, int]:
+    """Создаёт один пост для канала."""
     voice = VOICE_MAP.get(getattr(channel, "post_voice", "author"), VOICE_MAP["author"])
     fmt = FORMAT_MAP.get(getattr(channel, "post_format", "story"), FORMAT_MAP["story"])
     emoji = EMOJI_MAP.get(getattr(channel, "emoji_style", "minimal"), EMOJI_MAP["minimal"])
@@ -104,7 +137,11 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
     combined = about_lower + " " + style_lower
 
     # Юмор/абсурд/мемы — особый режим, перекрывает всё
-    is_humor = any(w in combined for w in ["смешн","юмор","абсурд","мем","прикол","зумер","дебил","весел","ирони","сатир","угар","ржать","ржака","шутк","хохот","комедия","fun","humor","meme","joke"])
+    is_humor = any(w in combined for w in [
+        "смешн", "юмор", "абсурд", "мем", "прикол", "зумер", "дебил",
+        "весел", "ирони", "сатир", "угар", "ржать", "ржака", "шутк",
+        "хохот", "комедия", "fun", "humor", "meme", "joke"
+    ])
 
     if is_humor:
         mood_instruction = """
@@ -148,9 +185,11 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
 
 ПРАВИЛА ДЛЯ ВСЕХ:
 - Никаких «следует отметить», «является», «в рамках» — живой язык
-- НЕ начинай с «Пишу пост», «Вот пост» — сразу текст
-- Не выдумывай факты без необходимости
-- Верни ТОЛЬКО текст поста"""
+- НЕ начинай с «Пишу пост», «Вот пост», «Дай мне секунду», «Нашёл» — сразу текст
+- ЗАПРЕЩЕНО: вступления, монологи, комментарии до текста поста
+- ЗАПРЕЩЕНО: спрашивать уточнения, предлагать варианты тем, писать меню
+- Если тема не задана — выбери сам и пиши
+- Верни ТОЛЬКО готовый текст поста, ничего больше"""
 
     if topic:
         user_msg = f"Напиши пост на тему: «{topic}»."
