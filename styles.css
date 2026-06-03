@@ -301,3 +301,23 @@ a { color: var(--accent); text-decoration: none; }
   body { padding-bottom: env(safe-area-inset-bottom); }
   .topbar { padding-top: env(safe-area-inset-top); }
 }
+
+/* ── Mobile scroll fix ───────────────────────── */
+html { overflow-x: hidden; }
+body { overflow-x: hidden; position: relative; }
+.wrap { 
+  min-height: calc(100vh - 60px);
+  overscroll-behavior: contain;
+}
+.tabs {
+  position: sticky;
+  top: 60px;
+  background: var(--bg);
+  z-index: 10;
+  padding-top: 4px;
+}
+#tabbody {
+  padding-bottom: 40px;
+}
+/* Prevent background scroll when interacting with tabs on iOS */
+.tab { -webkit-tap-highlight-color: transparent; }

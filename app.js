@@ -901,32 +901,49 @@ async function generateNow() {
 async function renderBilling() {
   await refreshUser();
   const pkgs = App.cfg?.packages || [];
+
+  const plans = [
+    { id:"p1", name:"Старт",     price:"490 ₽/мес",  channels:1,  posts:90,   tag:"" },
+    { id:"p2", name:"Про",       price:"990 ₽/мес",  channels:3,  posts:300,  tag:"popular" },
+    { id:"p3", name:"Бизнес",    price:"2 490 ₽/мес",channels:10, posts:1500, tag:"" },
+    { id:"p4", name:"Агентство", price:"4 990 ₽/мес",channels:0,  posts:5000, tag:"" },
+  ];
+
   $("app").innerHTML = topbar("dashboard", "назад") + `<div class="wrap">
-    <div class="page-head"><h1>Тарифы</h1>
+    <div class="page-head">
+      <h1>Тарифы</h1>
       <p>Баланс: <b class="mono">${fmt(App.user?.token_balance||0)}</b> токенов</p>
     </div>
+
     ${!App.cfg?.yoomoney_enabled
       ? `<div class="card" style="border-color:var(--accent);background:var(--accent-soft);margin-bottom:16px">
           <p style="color:var(--accent-dark)">Приём платежей пока не настроен.</p>
         </div>` : ""}
-    <div class="grid grid-4">${pkgs.map(p => `
-      <div class="price-card">
-        <div class="p-name">${esc(p.title)}</div>
-        <div class="p-price">${fmt(p.rub)} ₽</div>
-        <div class="p-tokens">${fmt(p.tokens)} токенов</div>
-        <button class="btn" style="width:100%;justify-content:center" onclick="buy('${p.id}')">Купить</button>
-      </div>`).join("")}</div>
 
-    <div class="card mt-lg">
-      <div class="card-title">Пригласи друга — получи токены</div>
-      <p style="font-size:14px;color:var(--text-dim);margin-bottom:14px">
-        Поделись своим кодом — ты получишь <b>50 000 токенов</b> за каждого нового пользователя.
-        Друг тоже получит бонус при регистрации.
+    <div class="grid grid-2" style="margin-bottom:16px">
+      ${plans.map(p => `
+      <div class="price-card" style="position:relative;${p.tag==="popular"?"border-color:var(--accent)":""}">
+        ${p.tag==="popular" ? `<div style="position:absolute;top:-10px;left:50%;transform:translateX(-50%);background:var(--accent);color:#fff;font-size:11px;font-weight:600;padding:2px 12px;border-radius:99px;white-space:nowrap">Популярный</div>` : ""}
+        <div class="p-name">${p.name}</div>
+        <div class="p-price" style="font-size:28px">${p.price}</div>
+        <div class="p-tokens" style="line-height:1.7">
+          📺 ${p.channels === 0 ? "Безлимит каналов" : `${p.channels} ${p.channels===1?"канал":p.channels<5?"канала":"каналов"}`}<br>
+          ✦ ${fmt(p.posts)} постов в месяц<br>
+          🤖 ИИ с веб-поиском
+        </div>
+        <button class="btn" style="width:100%;justify-content:center;margin-top:4px" onclick="buy('${p.id}')">Выбрать</button>
+      </div>`).join("")}
+    </div>
+
+    <div class="card" style="margin-bottom:16px">
+      <div class="card-title">🎁 Пригласи друга</div>
+      <p style="font-size:14px;color:var(--text-dim);margin-bottom:12px">
+        За каждого приглашённого — <b>+50 000 токенов</b> тебе и другу.
       </p>
       <div id="ref_block" class="text-faint">Загрузка…</div>
     </div>
 
-    <div class="card mt-lg">
+    <div class="card">
       <div class="card-title">История платежей</div>
       <div id="payList" class="text-faint">Загрузка…</div>
     </div>
