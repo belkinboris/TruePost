@@ -947,6 +947,12 @@ async function renderBilling() {
       <div class="card-title">История платежей</div>
       <div id="payList" class="text-faint">Загрузка…</div>
     </div>
+
+    <div style="text-align:center;margin-top:24px;padding-bottom:16px">
+      <button class="btn-danger btn-sm" onclick="deleteAccount()" style="font-size:13px;opacity:.7">
+        Удалить аккаунт
+      </button>
+    </div>
   </div>`;
 
   try {
@@ -980,6 +986,17 @@ async function buy(pid) {
 }
 
 // ══ BOOT ══════════════════════════════════════
+async function deleteAccount() {
+  if (!confirm("Удалить аккаунт?\n\nЭто удалит все каналы, посты и данные. Отменить нельзя.")) return;
+  const confirm2 = prompt("Введите DELETE для подтверждения:");
+  if (confirm2 !== "DELETE") return toast("Удаление отменено");
+  try {
+    await api("DELETE", "/me");
+    toast("Аккаунт удалён", "ok");
+    logout();
+  } catch(e) { toast(e.message, "err"); }
+}
+
 async function boot() {
   try { App.cfg = await api("GET", "/config"); } catch(_) { App.cfg = { packages: [] }; }
 

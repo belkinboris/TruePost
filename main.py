@@ -562,6 +562,27 @@ async def yoomoney_notify(request: Request):
 
 # ── Раздача сайта ─────────────────────────────────────────────
 
+@app.delete("/api/me")
+def delete_account(user: User = Depends(current_user)):
+    with session() as s:
+        uid = user.id
+        s.exec(__import__('sqlmodel').delete(Post).where(Post.user_id == uid))
+        # Удаляем источники каналов пользователя
+        from sqlmodel import select as sel
+        chans = s.exec(sel(Channel).where(Channel.user_id == uid)).all()
+        for ch in chans:
+            s.exec(__import__('sqlmodel').delete(Source).where(Source.channel_id == ch.id))
+        s.exec(__import__('sqlmodel').delete(Channel).where(Channel.user_id == uid))
+        s.exec(__import__('sqlmodel').delete(Payment).where(Payment.user_id == uid))
+        s.exec(__import__('sqlmodel').delete(Referral).where(Referral.referrer_id == uid))
+        s.exec(__import__('sqlmodel').delete(Referral).where(Referral.referred_id == uid))
+        u = s.get(User, uid)
+        if u:
+            s.delete(u)
+        s.commit()
+    return {"ok": True}
+
+
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
