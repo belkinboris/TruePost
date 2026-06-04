@@ -83,6 +83,10 @@ function renderAuth(mode="login") {
         </label>` : ""}
         <button class="btn" style="width:100%;margin-top:18px;justify-content:center" id="authBtn">
           ${mode==="login" ? "Войти" : "Создать аккаунт"}</button>
+        ${mode==="register" ? `<div style="font-size:12px;color:var(--text-faint);text-align:center;margin-top:12px;line-height:1.5">
+          Регистрируясь, вы принимаете <a href="/legal/offer" target="_blank" style="color:var(--accent)">условия оферты</a>
+          и <a href="/legal/privacy" target="_blank" style="color:var(--accent)">политику конфиденциальности</a>
+        </div>` : ""}
         <div class="auth-switch">${mode==="login"
           ? `Нет аккаунта? <a id="sw">Зарегистрироваться →</a>`
           : `Уже есть аккаунт? <a id="sw">Войти</a>`}
@@ -135,6 +139,7 @@ async function renderDashboard() {
       <p>ИИ пишет посты сам — тебе только выбирать лучший.</p>
     </div>
     <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
+    \${renderFooter()}
   </div>`;
 
   let chans = [];
@@ -1025,6 +1030,29 @@ function ncPickFreq(val, btn) {
   btn.classList.add("on");
 }
 
+function renderFooter() {
+  return `<div style="text-align:center;padding:32px 16px 16px;font-size:12px;color:var(--text-faint);line-height:1.8">
+    ИП Белкин Б.Б. · ИНН 771387918350 · ОГРНИП 324774600432188<br>
+    <a href="/legal/offer" target="_blank" style="color:var(--text-faint)">Оферта</a>
+    &nbsp;·&nbsp;
+    <a href="/legal/privacy" target="_blank" style="color:var(--text-faint)">Конфиденциальность</a>
+    &nbsp;·&nbsp;
+    <a href="/legal/refund" target="_blank" style="color:var(--text-faint)">Возврат</a>
+  </div>`;
+}
+
+function initCookieBanner() {
+  if (localStorage.getItem("cookie_ok")) return;
+  const b = document.createElement("div");
+  b.style.cssText = "position:fixed;bottom:0;left:0;right:0;background:#1a1815;color:#e9e6df;font-size:13px;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;z-index:9999;";
+  b.innerHTML = `<span>Мы используем cookies для авторизации. <a href="/legal/privacy" target="_blank" style="color:#d8b15e">Подробнее</a></span>
+    <button onclick="this.parentElement.remove();localStorage.setItem('cookie_ok','1')"
+      style="background:#d8b15e;color:#1a1404;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;white-space:nowrap;font-weight:500">
+      Понятно
+    </button>`;
+  document.body.appendChild(b);
+}
+
 async function boot() {
   try { App.cfg = await api("GET", "/config"); } catch(_) { App.cfg = { packages: [] }; }
 
@@ -1032,6 +1060,7 @@ async function boot() {
   const urlRef = new URLSearchParams(window.location.search).get("ref");
   if (urlRef) sessionStorage.setItem("ref_code", urlRef);
 
+  initCookieBanner();
   if (!App.token) return renderAuth();
   try { App.user = await api("GET", "/me"); go("dashboard"); }
   catch(_) { logout(); }
