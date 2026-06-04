@@ -583,6 +583,18 @@ def delete_account(user: User = Depends(current_user)):
     return {"ok": True}
 
 
+@app.get("/legal/offer")
+def legal_offer():
+    return FileResponse("static/legal/offer.html")
+
+@app.get("/legal/privacy")
+def legal_privacy():
+    return FileResponse("static/legal/privacy.html")
+
+@app.get("/legal/refund")
+def legal_refund():
+    return FileResponse("static/legal/refund.html")
+
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
