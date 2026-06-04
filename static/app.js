@@ -104,7 +104,17 @@ function renderAuth(mode="login") {
       const r = await api("POST", mode==="login" ? "/login" : "/register", body);
       App.token = r.token; localStorage.setItem("ap_token", r.token);
       await boot();
-    } catch(e) { toast(e.message, "err"); }
+    } catch(e) {
+      // Показываем понятные ошибки
+      let msg = e.message || "Что-то пошло не так";
+      if (msg.includes("уже есть") || msg.includes("already")) msg = "Этот email уже зарегистрирован. Войдите или используйте другой email.";
+      else if (msg.includes("Неверный") || msg.includes("Invalid") || msg.includes("401")) msg = "Неверный email или пароль. Проверьте данные и попробуйте снова.";
+      else if (msg.includes("6 символ") || msg.includes("password")) msg = "Пароль должен быть не менее 6 символов.";
+      else if (msg.includes("email") || msg.includes("@")) msg = "Введите корректный email адрес.";
+      else if (msg.includes("502") || msg.includes("503") || msg.includes("504")) msg = "Сервер временно недоступен. Попробуйте через минуту.";
+      else if (msg.includes("Failed to fetch") || msg.includes("NetworkError")) msg = "Нет соединения с сервером. Проверьте интернет.";
+      toast(msg, "err");
+    }
   };
   if ($("sw")) $("sw").onclick = () => renderAuth(mode==="login" ? "register" : "login");
   $("pw").onkeydown = e => { if (e.key==="Enter") $("authBtn").click(); };
@@ -207,8 +217,12 @@ function renderNewChannel() {
 
       <label class="field mt">
         <span class="field-label">@username канала в Telegram</span>
-        <input id="nc_chat" placeholder="@my_channel" autocomplete="off">
-        <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> как администратора с правом публикации. После создания канала проверь подключение в настройках.</div>
+        <div class="row" style="gap:8px">
+          <input id="nc_chat" placeholder="@my_channel" autocomplete="off" style="flex:1">
+          <button class="btn-outline btn-sm" onclick="ncVerifyChannel()" id="nc_ver_btn" style="white-space:nowrap">Проверить</button>
+        </div>
+        <div class="hint">1. Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором канала с правом публикации.<br>2. Вставь @username канала выше.<br>3. Нажми «Проверить».</div>
+        <div id="nc_ver_msg" style="font-size:13px;margin-top:6px"></div>
       </label>
 
       <label class="field mt">
@@ -299,6 +313,29 @@ async function ncAnalyze() {
     toast("Не удалось прочитать канал. Он должен быть публичным.", "err");
   }
   btn.innerHTML = "Изучить"; btn.disabled = false;
+}
+
+async function ncVerifyChannel() {
+  const chat = ($("nc_chat")||{value:""}).value.trim();
+  if (!chat) return toast("Введите @username канала", "err");
+
+  const btn = $("nc_ver_btn");
+  const msg = $("nc_ver_msg");
+  if (btn) { btn.innerHTML = '<span class="spinner"></span>'; btn.disabled = true; }
+
+  try {
+    // Временно создаём канал для проверки — или проверяем напрямую
+    const r = await api("POST", "/verify_channel_only", { tg_chat: chat });
+    if (msg) {
+      msg.textContent = r.message;
+      msg.style.color = r.ok ? "var(--green)" : "var(--red)";
+    }
+    if (r.ok) toast("Канал подключён ✓", "ok");
+  } catch(e) {
+    if (msg) { msg.textContent = e.message; msg.style.color = "var(--red)"; }
+  }
+
+  if (btn) { btn.innerHTML = "Проверить"; btn.disabled = false; }
 }
 
 async function ncGenerate() {
@@ -986,13 +1023,23 @@ async function renderBilling() {
 
   try {
     const me = await api("GET", "/me");
-    const refUrl = `${window.location.origin}?ref=${me.ref_code||""}`;
+    const code = me.ref_code || "";
     $("ref_block").innerHTML = `
-      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-        <input value="${esc(refUrl)}" readonly style="flex:1;font-family:monospace;font-size:12px">
-        <button class="btn-outline btn-sm" onclick="navigator.clipboard.writeText('${esc(refUrl)}').then(()=>toast('Скопировано','ok'))">Копировать</button>
+      <div style="margin-bottom:10px;font-size:14px;color:var(--text-dim);line-height:1.6">
+        Поделись своим кодом с другом. При регистрации в боте он вводит его —
+        и вы оба получаете по <b>50 000 токенов</b>.
       </div>
-      <div class="hint" style="margin-top:6px">Приглашений отправлено: <b>${me.referrals_count||0}</b></div>`;
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">
+        <div style="font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:600;letter-spacing:.1em;background:var(--surface2);border:1px solid var(--border-soft);border-radius:10px;padding:10px 18px;flex:1;text-align:center">${esc(code)}</div>
+        <button class="btn-outline btn-sm" onclick="navigator.clipboard.writeText('${esc(code)}').then(()=>toast('Код скопирован','ok'))">Копировать код</button>
+      </div>
+      <div style="font-size:13px;color:var(--text-dim);background:var(--surface2);border-radius:10px;padding:12px 14px;line-height:1.7">
+        Инструкция для друга:<br>
+        1. Открой бота <a href="https://t.me/maintrpost_bot" target="_blank" style="color:var(--accent)">@maintrpost_bot</a><br>
+        2. Нажми «Открыть АвтоПост»<br>
+        3. При регистрации введи реферальный код: <b>${esc(code)}</b>
+      </div>
+      <div class="hint" style="margin-top:8px">Приглашений отправлено: <b>${me.referrals_count||0}</b></div>`;
   } catch(_) {}
 
   try {
@@ -1099,6 +1146,6 @@ window.addSource=addSource; window.delSource=delSource; window.loadSources=loadS
 window.savePost=savePost; window.publishPost=publishPost;
 window.rejectPost=rejectPost; window.deletePost=deletePost;
 window.schedulePrompt=schedulePrompt; window.generateNow=generateNow;
-window.buy=buy; window.ncAnalyze=ncAnalyze; window.ncGenerate=ncGenerate; window.ncSelect=ncSelect; window.ncPickFreq=ncPickFreq;
+window.buy=buy; window.ncVerifyChannel=ncVerifyChannel; window.ncAnalyze=ncAnalyze; window.ncGenerate=ncGenerate; window.ncSelect=ncSelect; window.ncPickFreq=ncPickFreq;
 
 boot();
