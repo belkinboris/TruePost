@@ -139,8 +139,10 @@ async function renderDashboard() {
       <p>ИИ пишет посты сам — тебе только выбирать лучший.</p>
     </div>
     <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
-    \${renderFooter()}
+    <div id="dash_footer"></div>
   </div>`;
+  const df = $("dash_footer");
+  if (df) df.innerHTML = renderFooter();
 
   let chans = [];
   try { chans = await api("GET", "/channels"); } catch(e) { toast(e.message, "err"); }
@@ -1041,6 +1043,17 @@ function renderFooter() {
   </div>`;
 }
 
+function initKeyboardDismiss() {
+  document.addEventListener("touchstart", function(e) {
+    const active = document.activeElement;
+    if (active && (active.tagName === "INPUT" || active.tagName === "TEXTAREA")) {
+      if (!e.target.closest("input, textarea, button, select, a")) {
+        active.blur();
+      }
+    }
+  }, { passive: true });
+}
+
 function initCookieBanner() {
   if (localStorage.getItem("cookie_ok")) return;
   const b = document.createElement("div");
@@ -1061,6 +1074,7 @@ async function boot() {
   if (urlRef) sessionStorage.setItem("ref_code", urlRef);
 
   initCookieBanner();
+  initKeyboardDismiss();
   if (!App.token) return renderAuth();
   try { App.user = await api("GET", "/me"); go("dashboard"); }
   catch(_) { logout(); }
