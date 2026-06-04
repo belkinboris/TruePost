@@ -500,8 +500,89 @@ def packages():
     return config.TOKEN_PACKAGES
 
 
+async def _sync_yookassa_pending_payments(user_id: int) -> None:
+    """
+    Резервная синхронизация платежей с YooKassa.
+
+    Нужна на случай, если HTTP-уведомление YooKassa не дошло или было
+    пропущено. Проверяем только платежи текущего пользователя со статусом
+    pending/waiting_for_capture и уже известным operation_id = payment_id YooKassa.
+    """
+    if not billing.is_configured():
+        return
+
+    with session() as s:
+        pending = s.exec(
+            select(Payment).where(
+                Payment.user_id == user_id,
+                Payment.status.in_(["pending", "waiting_for_capture"]),
+                Payment.operation_id != "",
+            ).order_by(Payment.created_at.desc())
+        ).all()
+        items = [(p.id, p.operation_id) for p in pending if p.operation_id]
+
+    for local_payment_id, yookassa_payment_id in items:
+        try:
+            yk_payment = await billing.get_payment(yookassa_payment_id)
+        except billing.YooKassaError as exc:
+            logger.warning(
+                "Не удалось синхронизировать платёж YooKassa %s: %s",
+                yookassa_payment_id, exc,
+            )
+            continue
+
+        status = yk_payment.get("status", "")
+        paid = yk_payment.get("paid") is True
+
+        with session() as s:
+            pay = s.get(Payment, local_payment_id)
+            if not pay or pay.user_id != user_id:
+                continue
+
+            if status == "canceled":
+                if pay.status != "paid":
+                    pay.status = "canceled"
+                    s.add(pay)
+                    s.commit()
+                continue
+
+            if status != "succeeded" or not paid:
+                if status and pay.status != status:
+                    pay.status = status
+                    s.add(pay)
+                    s.commit()
+                continue
+
+            try:
+                actual_amount = round(float((yk_payment.get("amount") or {}).get("value", 0)), 2)
+            except Exception:
+                actual_amount = 0
+            expected_amount = round(float(pay.rub), 2)
+            if actual_amount != expected_amount:
+                logger.error(
+                    "YooKassa sync: сумма не совпала, payment_id=%s, actual=%s, expected=%s",
+                    yookassa_payment_id, actual_amount, expected_amount,
+                )
+                continue
+
+            if pay.status != "paid":
+                pay.status = "paid"
+                pay.paid_at = datetime.utcnow()
+                u = s.get(User, pay.user_id)
+                if u:
+                    u.token_balance += pay.tokens
+                    s.add(u)
+                s.add(pay)
+                s.commit()
+                logger.info(
+                    "Платёж YooKassa зачтён через sync: пользователь %s +%s токенов",
+                    pay.user_id, pay.tokens,
+                )
+
+
 @app.get("/api/payments")
-def payments(user: User = Depends(current_user)):
+async def payments(user: User = Depends(current_user)):
+    await _sync_yookassa_pending_payments(user.id)
     with session() as s:
         ps = s.exec(
             select(Payment).where(Payment.user_id == user.id).order_by(Payment.created_at.desc())
