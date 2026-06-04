@@ -321,3 +321,22 @@ body { overflow-x: hidden; position: relative; }
 }
 /* Prevent background scroll when interacting with tabs on iOS */
 .tab { -webkit-tap-highlight-color: transparent; }
+
+/* ── Back row (отдельная строка под топбаром) ─ */
+.back-row {
+  padding: 10px 32px 0;
+  background: var(--bg);
+}
+.back-row .back-link {
+  margin-bottom: 0;
+}
+@media (max-width: 640px) {
+  .back-row { padding: 8px 16px 0; }
+}
+
+/* ── Freq seg compact ────────────────────────── */
+#nc_freq_seg button {
+  min-width: 42px;
+  padding: 7px 8px;
+  font-size: 13px;
+}

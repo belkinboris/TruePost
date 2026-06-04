@@ -110,20 +110,16 @@ function renderAuth(mode="login") {
 function topbar(backView, backLabel) {
   const low = App.user && App.user.token_balance < 5000;
   const back = backView
-    ? `<button class="back-link" onclick="go('${backView}')">← ${backLabel||"назад"}</button>`
+    ? `<div class="back-row"><button class="back-link" onclick="go('${backView}')">← ${backLabel||"назад"}</button></div>`
     : "";
   return `<div class="topbar">
-    <div style="display:flex;align-items:center;gap:12px">
-      <a class="brand" onclick="go('dashboard')">
-        <span class="brand-name">Авто<span>пост</span></span>
-      </a>
-      ${back}
-    </div>
+    <a class="brand" onclick="go('dashboard')">
+      <span class="brand-name">Авто<span>пост</span></span>
+    </a>
     <div class="topbar-right">
-      <div class="token-pill ${low?"low":""}" onclick="go('billing')" title="Баланс токенов">
-        <span class="dot"></span>
-        <span class="amount">${fmt(App.user?.token_balance||0)}</span>
-        ${!isMobile() ? `<span class="label">токенов</span>` : ""}
+      <div class="token-pill" onclick="go('billing')" title="Тарифы и баланс" style="padding:6px 12px">
+        <span class="dot" style="background:var(--accent)"></span>
+        <span style="font-size:13px;font-weight:500;color:var(--text-dim)">Тарифы</span>
       </div>
       <button class="btn-ghost btn-sm" onclick="logout()">Выйти</button>
     </div>
@@ -134,12 +130,9 @@ function topbar(backView, backLabel) {
 async function renderDashboard() {
   await refreshUser();
   $("app").innerHTML = topbar() + `<div class="wrap">
-    <div class="page-head row between" style="flex-wrap:wrap;gap:12px">
-      <div>
-        <h1>Твои каналы</h1>
-        <p>ИИ пишет посты сам — тебе только выбирать лучший.</p>
-      </div>
-      <button class="btn" onclick="go('new_channel')">+ Добавить канал</button>
+    <div class="page-head">
+      <h1>Твои каналы</h1>
+      <p>ИИ пишет посты сам — тебе только выбирать лучший.</p>
     </div>
     <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
   </div>`;
@@ -206,6 +199,12 @@ function renderNewChannel() {
       </label>
 
       <label class="field mt">
+        <span class="field-label">@username канала в Telegram</span>
+        <input id="nc_chat" placeholder="@my_channel" autocomplete="off">
+        <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> как администратора с правом публикации. После создания канала проверь подключение в настройках.</div>
+      </label>
+
+      <label class="field mt">
         <span class="field-label">О чём канал</span>
         <textarea id="nc_about" rows="3" placeholder="Опиши идею своими словами — о чём, для кого, что интересно аудитории"></textarea>
       </label>
@@ -236,20 +235,24 @@ function renderNewChannel() {
         </div>
         <div id="nc_style_preview" class="hidden" style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border-soft)">
           <div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text-faint);margin-bottom:6px">Профиль стиля</div>
-          <div id="nc_style_text" style="font-size:13px;color:var(--text-dim);line-height:1.6"></div>
+          <div id="nc_style_text" style="font-size:13px;color:var(--text-dim);line-height:1.6;white-space:pre-wrap"></div>
         </div>
       </div>
 
       <div class="divider"></div>
 
       <div class="row between" style="flex-wrap:wrap;gap:10px">
-        <div style="font-size:13px;color:var(--text-dim)">Частота: каждые
-          <select id="nc_interval" style="width:auto;display:inline-block;padding:4px 8px;font-size:13px">
-            <option value="6">6 часов</option>
-            <option value="12" selected>12 часов</option>
-            <option value="24">24 часа</option>
-            <option value="48">48 часов</option>
-          </select>
+        <div>
+          <div class="field-label" style="margin-bottom:8px">Частота публикаций</div>
+          <div class="seg" id="nc_freq_seg">
+            <button class="" onclick="ncPickFreq(1,this)">1ч</button>
+            <button class="" onclick="ncPickFreq(3,this)">3ч</button>
+            <button class="" onclick="ncPickFreq(6,this)">6ч</button>
+            <button class="on" onclick="ncPickFreq(12,this)">12ч</button>
+            <button class="" onclick="ncPickFreq(24,this)">24ч</button>
+            <button class="" onclick="ncPickFreq(48,this)">48ч</button>
+          </div>
+          <input type="hidden" id="nc_interval" value="12">
         </div>
         <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-dim)">
           <label class="switch" style="transform:scale(.85)">
@@ -282,7 +285,7 @@ async function ncAnalyze() {
     // Временно создаём канал для анализа стиля
     const r = await api("POST", "/analyze_style_only", { link });
     _ncStyleProfile = r.profile || "";
-    $("nc_style_text").textContent = _ncStyleProfile;
+    $("nc_style_text").textContent = _ncStyleProfile.replace(/#{1,3} /g,"").replace(/\*\*/g,"");
     $("nc_style_preview").classList.remove("hidden");
     toast("Стиль изучен — учтём при генерации", "ok");
   } catch(e) {
@@ -306,6 +309,7 @@ async function ncGenerate() {
   try {
     chan = await api("POST", "/channels", {
       title, about, style,
+      tg_chat: ($("nc_chat")||{value:""}).value.trim(),
       interval_hours: parseInt($("nc_interval").value),
       use_web_search: $("nc_web").checked,
       style_profile: _ncStyleProfile,
@@ -342,14 +346,24 @@ async function ncGenerate() {
   btn.innerHTML = "✦ Сгенерировать три варианта поста";
   btn.disabled = false;
 
+  // Меняем кнопку
+  const genBtnEl = $("nc_gen_btn");
+  if (genBtnEl) {
+    genBtnEl.textContent = "✓ Три варианта готовы — выбери ниже ↓";
+    genBtnEl.style.background = "var(--green)";
+    genBtnEl.onclick = () => $("nc_results").scrollIntoView({behavior:"smooth"});
+  }
+
   $("nc_results").classList.remove("hidden");
   $("nc_results").innerHTML = `
-    <h2 style="font-family:'Instrument Serif',serif;font-size:24px;font-weight:400;margin-bottom:6px">
-      Выбери вариант который понравился
+    <h2 style="font-family:'Instrument Serif',serif;font-size:22px;font-weight:400;margin-bottom:4px">
+      Выбери вариант
     </h2>
-    <p style="color:var(--text-dim);font-size:14px;margin-bottom:20px">
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:6px">
       Выбранный пост попадёт в очередь. Остальные удалятся.
-      Потом можно настроить детали в любое время.
+    </p>
+    <p style="color:var(--text-faint);font-size:12px;margin-bottom:18px">
+      Не понравился ни один? Выбери любой и измени параметры в расширенных настройках.
     </p>
     ${results.map((r, i) => r.text ? `
     <div class="onboard-card" id="oc_${i}">
@@ -358,7 +372,7 @@ async function ncGenerate() {
           <span class="chip chip-blue">${esc(r.label)}</span>
           <span style="font-size:12px;color:var(--text-faint);margin-left:8px">${esc(r.desc)}</span>
         </div>
-        <button class="btn btn-sm" onclick="ncSelect(${i})">Выбрать этот →</button>
+        <button class="btn btn-sm" onclick="ncSelect(${i})">Выбрать →</button>
       </div>
       <div class="post-body" style="margin-top:12px">${esc(r.text)}</div>
     </div>` : `
@@ -366,12 +380,20 @@ async function ncGenerate() {
       <span class="chip chip-gray">${esc(r.label)}</span>
       <p style="color:var(--red);font-size:13px;margin-top:8px">Не удалось: ${esc(r.error||"")}</p>
     </div>`).join("")}
-    <div style="text-align:center;margin-top:16px">
-      <button class="btn-ghost" onclick="go('channel',${chan.id})" style="font-size:13px">
-        Настроить под себя →
-        <span style="color:var(--text-faint);font-size:12px;margin-left:4px">голос, формат, автопубликация</span>
+    <div style="margin-top:20px;padding:16px;background:var(--accent-soft);border-radius:var(--radius);border:1px solid #e8d5bb">
+      <div style="font-size:14px;font-weight:600;color:var(--accent-dark);margin-bottom:6px">
+        Хочешь другой стиль или формат?
+      </div>
+      <div style="font-size:13px;color:var(--text-dim);margin-bottom:12px">
+        В расширенных настройках можно выбрать голос автора, формат поста и частоту.
+      </div>
+      <button class="btn" onclick="go('channel',${chan.id});setTimeout(()=>setTab('advanced'),300)" style="width:100%;justify-content:center">
+        Настроить расширенные параметры →
       </button>
     </div>`;
+
+  // Скролл к результатам
+  setTimeout(() => $("nc_results").scrollIntoView({behavior:"smooth"}), 100);
 }
 
 async function ncSelect(idx) {
@@ -604,7 +626,7 @@ function renderSettings() {
           <button class="btn-outline btn-sm" onclick="analyzeChannel()" id="anBtn" style="white-space:nowrap">Изучить</button>
         </div>
         <div id="analyze_result"></div>
-        ${c.style_profile ? `<div class="hint" style="color:var(--green);margin-top:6px">✓ Профиль стиля сохранён (${c.style_profile.length} симв.)</div>` : ""}
+        ${c.style_profile ? `<div class="hint" style="color:var(--green);margin-top:6px">✓ Стиль изучен — ${Math.round(c.style_profile.length/100)*100 || "несколько"} симв. профиля сохранены</div>` : ""}
       </div>
     </div>
 
@@ -912,7 +934,7 @@ async function renderBilling() {
   $("app").innerHTML = topbar("dashboard", "назад") + `<div class="wrap">
     <div class="page-head">
       <h1>Тарифы</h1>
-      <p>Баланс: <b class="mono">${fmt(App.user?.token_balance||0)}</b> токенов</p>
+      <p>Баланс: <b class="mono">${fmt(App.user?.token_balance||0)}</b> токенов · ≈${Math.floor((App.user?.token_balance||0)/5000)} постов</p>
     </div>
 
     ${!App.cfg?.yoomoney_enabled
@@ -997,6 +1019,12 @@ async function deleteAccount() {
   } catch(e) { toast(e.message, "err"); }
 }
 
+function ncPickFreq(val, btn) {
+  $("nc_interval").value = val;
+  document.querySelectorAll("#nc_freq_seg button").forEach(b => b.classList.remove("on"));
+  btn.classList.add("on");
+}
+
 async function boot() {
   try { App.cfg = await api("GET", "/config"); } catch(_) { App.cfg = { packages: [] }; }
 
@@ -1019,6 +1047,6 @@ window.addSource=addSource; window.delSource=delSource; window.loadSources=loadS
 window.savePost=savePost; window.publishPost=publishPost;
 window.rejectPost=rejectPost; window.deletePost=deletePost;
 window.schedulePrompt=schedulePrompt; window.generateNow=generateNow;
-window.buy=buy; window.ncAnalyze=ncAnalyze; window.ncGenerate=ncGenerate; window.ncSelect=ncSelect;
+window.buy=buy; window.ncAnalyze=ncAnalyze; window.ncGenerate=ncGenerate; window.ncSelect=ncSelect; window.ncPickFreq=ncPickFreq;
 
 boot();
