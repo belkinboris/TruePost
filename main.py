@@ -112,7 +112,9 @@ def get_config():
         "bot_username": config.TELEGRAM_BOT_USERNAME,
         "public_url": config.PUBLIC_URL,
         "packages": config.TOKEN_PACKAGES,
-        "yoomoney_enabled": bool(config.YOOMONEY_WALLET),
+        "yookassa_enabled": billing.is_configured(),
+        # Старый ключ оставлен для совместимости с фронтом, если браузер закэширует app.js.
+        "yoomoney_enabled": billing.is_configured(),
     }
 
 
@@ -508,14 +510,16 @@ def payments(user: User = Depends(current_user)):
 
 
 @app.post("/api/billing/buy")
-def buy(data: BuyIn, user: User = Depends(current_user)):
+async def buy(data: BuyIn, user: User = Depends(current_user)):
     pkg = config.package_by_id(data.package_id)
     if not pkg:
         raise HTTPException(400, "Пакет не найден")
-    if not config.YOOMONEY_WALLET:
+    if not billing.is_configured():
         raise HTTPException(400, "Приём платежей не настроен")
 
     label = f"u{user.id}-{data.package_id}-{secrets.token_hex(6)}"
+    description = f"Автопост: пакет «{pkg['title']}» ({pkg['tokens']} токенов)"
+
     with session() as s:
         pay = Payment(
             user_id=user.id,
@@ -525,37 +529,118 @@ def buy(data: BuyIn, user: User = Depends(current_user)):
             tokens=pkg["tokens"],
             status="pending",
         )
-        s.add(pay); s.commit()
+        s.add(pay)
+        s.commit()
+        s.refresh(pay)
+        local_payment_id = pay.id
 
-    url = billing.build_payment_url(
-        label=label,
-        amount_rub=pkg["rub"],
-        description=f"Автопост: пакет «{pkg['title']}» ({pkg['tokens']} токенов)",
-    )
-    return {"payment_url": url, "label": label}
+    try:
+        yk_payment = await billing.create_payment(
+            label=label,
+            amount_rub=pkg["rub"],
+            description=description,
+            user_id=user.id,
+            package_id=pkg["id"],
+            user_email=user.email,
+        )
+    except billing.YooKassaError as exc:
+        with session() as s:
+            pay = s.get(Payment, local_payment_id)
+            if pay:
+                pay.status = "failed"
+                s.add(pay)
+                s.commit()
+        raise HTTPException(502, str(exc))
 
+    payment_id = yk_payment.get("id", "")
+    payment_status = yk_payment.get("status", "pending")
+    confirmation_url = (yk_payment.get("confirmation") or {}).get("confirmation_url")
+    if not confirmation_url:
+        raise HTTPException(502, "YooKassa не вернула ссылку на оплату")
 
-@app.post("/api/yoomoney/notify")
-async def yoomoney_notify(request: Request):
-    form = dict((await request.form()))
-    if not billing.verify_notification(form):
-        return PlainTextResponse("bad signature", status_code=200)
-
-    label = form.get("label", "")
     with session() as s:
-        pay = s.exec(select(Payment).where(Payment.label == label)).first()
-        if not pay or pay.status == "paid":
+        pay = s.get(Payment, local_payment_id)
+        if pay:
+            pay.operation_id = payment_id
+            pay.status = payment_status or "pending"
+            s.add(pay)
+            s.commit()
+
+    return {"payment_url": confirmation_url, "label": label, "payment_id": payment_id}
+
+
+@app.post("/api/yookassa/notify")
+async def yookassa_notify(request: Request):
+    """Webhook YooKassa. Начисляет токены только после проверки платежа через API YooKassa."""
+    try:
+        payload = await request.json()
+    except Exception:
+        logger.warning("YooKassa webhook: невалидный JSON")
+        return PlainTextResponse("OK", status_code=200)
+
+    event = payload.get("event", "")
+    obj = payload.get("object") or {}
+    payment_id = obj.get("id", "")
+    if not payment_id:
+        logger.warning("YooKassa webhook без payment id: %s", payload)
+        return PlainTextResponse("OK", status_code=200)
+
+    try:
+        yk_payment = await billing.get_payment(payment_id)
+    except billing.YooKassaError as exc:
+        logger.warning("Не удалось проверить платёж YooKassa %s: %s", payment_id, exc)
+        return PlainTextResponse("retry", status_code=500)
+
+    metadata = yk_payment.get("metadata") or obj.get("metadata") or {}
+    label = metadata.get("label", "")
+    status = yk_payment.get("status", "")
+    paid = yk_payment.get("paid") is True
+
+    with session() as s:
+        pay = s.exec(select(Payment).where(Payment.operation_id == payment_id)).first()
+        if not pay and label:
+            pay = s.exec(select(Payment).where(Payment.label == label)).first()
+        if not pay:
+            logger.warning("YooKassa webhook: локальный платёж не найден, payment_id=%s, label=%s", payment_id, label)
             return PlainTextResponse("OK", status_code=200)
 
-        pay.status = "paid"
-        pay.operation_id = form.get("operation_id", "")
-        pay.paid_at = datetime.utcnow()
-        u = s.get(User, pay.user_id)
-        if u:
-            u.token_balance += pay.tokens
-            s.add(u)
-        s.add(pay); s.commit()
-        logger.info(f"Платёж зачтён: пользователь {pay.user_id} +{pay.tokens} токенов")
+        pay.operation_id = payment_id
+
+        if event == "payment.canceled" or status == "canceled":
+            if pay.status != "paid":
+                pay.status = "canceled"
+                s.add(pay)
+                s.commit()
+            return PlainTextResponse("OK", status_code=200)
+
+        if event != "payment.succeeded" or status != "succeeded" or not paid:
+            pay.status = status or pay.status
+            s.add(pay)
+            s.commit()
+            return PlainTextResponse("OK", status_code=200)
+
+        try:
+            actual_amount = round(float((yk_payment.get("amount") or {}).get("value", 0)), 2)
+        except Exception:
+            actual_amount = 0
+        expected_amount = round(float(pay.rub), 2)
+        if actual_amount != expected_amount:
+            logger.error(
+                "YooKassa webhook: сумма не совпала, payment_id=%s, actual=%s, expected=%s",
+                payment_id, actual_amount, expected_amount,
+            )
+            return PlainTextResponse("OK", status_code=200)
+
+        if pay.status != "paid":
+            pay.status = "paid"
+            pay.paid_at = datetime.utcnow()
+            u = s.get(User, pay.user_id)
+            if u:
+                u.token_balance += pay.tokens
+                s.add(u)
+            s.add(pay)
+            s.commit()
+            logger.info("Платёж YooKassa зачтён: пользователь %s +%s токенов", pay.user_id, pay.tokens)
 
     return PlainTextResponse("OK", status_code=200)
 

@@ -14,12 +14,17 @@ ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./postbot.db")
-YOOMONEY_WALLET = os.getenv("YOOMONEY_WALLET", "")
-YOOMONEY_NOTIFICATION_SECRET = os.getenv("YOOMONEY_NOTIFICATION_SECRET", "")
 PUBLIC_URL = os.getenv("PUBLIC_URL") or (
     f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}"
     if os.getenv("RAILWAY_PUBLIC_DOMAIN") else "http://localhost:8000"
 )
+
+# YooKassa API
+YOOKASSA_SHOP_ID = os.getenv("YOOKASSA_SHOP_ID", "")
+YOOKASSA_SECRET_KEY = os.getenv("YOOKASSA_SECRET_KEY", "")
+YOOKASSA_RETURN_URL = os.getenv("YOOKASSA_RETURN_URL", f"{PUBLIC_URL}/?paid=1")
+YOOKASSA_SEND_RECEIPT = os.getenv("YOOKASSA_SEND_RECEIPT", "false").lower() in {"1", "true", "yes", "on"}
+YOOKASSA_VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))  # 1 = без НДС
 
 # Токенов в подарок новому пользователю
 WELCOME_TOKENS = int(os.getenv("WELCOME_TOKENS", "30000"))
@@ -38,7 +43,7 @@ PLANS = {
     "agency":   {"title": "Агентство",  "rub": 4990, "channels": 0, "posts_per_month": 5000},
 }
 
-# Токены для внутреннего учёта (покупка через ЮMoney, если используем)
+# Токены для внутреннего учёта (покупка через YooKassa)
 _DEFAULT_PACKAGES = [
     {"id": "p1", "title": "Старт",    "rub": 490,  "tokens": 500_000},
     {"id": "p2", "title": "Про",      "rub": 990,  "tokens": 1_200_000},

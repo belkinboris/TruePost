@@ -944,7 +944,7 @@ async function renderBilling() {
       <p>Баланс: <b class="mono">${fmt(App.user?.token_balance||0)}</b> токенов · ≈${Math.floor((App.user?.token_balance||0)/5000)} постов</p>
     </div>
 
-    ${!App.cfg?.yoomoney_enabled
+    ${!(App.cfg?.yookassa_enabled ?? App.cfg?.yoomoney_enabled)
       ? `<div class="card" style="border-color:var(--accent);background:var(--accent-soft);margin-bottom:16px">
           <p style="color:var(--accent-dark)">Приём платежей пока не настроен.</p>
         </div>` : ""}
@@ -1000,7 +1000,7 @@ async function renderBilling() {
     $("payList").innerHTML = ps.length
       ? ps.map(p => `<div class="src-row">
           <span class="src-url">${new Date(p.created_at+"Z").toLocaleString("ru-RU")} · ${fmt(p.tokens)} ток.</span>
-          <span class="chip ${p.status==="paid"?"chip-green":"chip-orange"}">${p.status==="paid"?"оплачено":"ожидает"}</span>
+          <span class="chip ${p.status==="paid"?"chip-green":"chip-orange"}">${paymentStatusLabel(p.status)}</span>
         </div>`).join("")
       : `<p style="font-size:13px;color:var(--text-faint)">Платежей пока не было.</p>`;
   } catch(_) {}
@@ -1012,6 +1012,15 @@ async function buy(pid) {
     toast("Открываю оплату…", "ok");
     window.open(r.payment_url, "_blank");
   } catch(e) { toast(e.message, "err"); }
+}
+
+function paymentStatusLabel(status) {
+  return ({
+    paid: "оплачено",
+    pending: "ожидает",
+    canceled: "отменён",
+    failed: "ошибка"
+  })[status] || status || "ожидает";
 }
 
 // ══ BOOT ══════════════════════════════════════
