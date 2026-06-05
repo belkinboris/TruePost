@@ -27,6 +27,7 @@ from database import (
     init_db, session,
     User, Channel, Source, Post, Payment, Referral,
 )
+from pydantic import BaseModel as _BaseModel
 from schemas import (
     AuthIn, ChannelIn, ChannelPatch, SourceIn,
     AnalyzeIn, AnalyzeStyleOnly, GenerateFormatIn, PostIn,
@@ -749,11 +750,11 @@ def delete_account(user: User = Depends(current_user)):
     return {"ok": True}
 
 
-class VerifyChannelOnly(BaseModel):
+class _VerifyIn(_BaseModel):
     tg_chat: str
 
 @app.post("/api/verify_channel_only")
-async def verify_channel_only(data: VerifyChannelOnly, user: User = Depends(current_user)):
+async def verify_channel_only(data: _VerifyIn, user: User = Depends(current_user)):
     chat = data.tg_chat.strip()
     if not chat:
         raise HTTPException(400, "Укажите @username канала")
