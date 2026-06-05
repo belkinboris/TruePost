@@ -28,6 +28,24 @@ from database import (
     User, Channel, Source, Post, Payment, Referral,
 )
 from pydantic import BaseModel as _BaseModel
+from typing import Optional as _Opt
+
+class _VerifyIn(_BaseModel):
+    tg_chat: str
+
+class _ConsultIn(_BaseModel):
+    message: str
+    history: list = []
+
+class _RuleIn(_BaseModel):
+    rule_text: str
+
+class _MePatch(_BaseModel):
+    notify_new_post: _Opt[bool] = None
+    notify_published: _Opt[bool] = None
+    notify_low_tokens: _Opt[bool] = None
+    tg_chat_id: _Opt[int] = None
+
 from schemas import (
     AuthIn, ChannelIn, ChannelPatch, SourceIn,
     AnalyzeIn, AnalyzeStyleOnly, GenerateFormatIn, PostIn,
@@ -748,18 +766,6 @@ def delete_account(user: User = Depends(current_user)):
             s.delete(u)
         s.commit()
     return {"ok": True}
-
-
-class _VerifyIn(_BaseModel):
-    tg_chat: str
-
-@app.post("/api/verify_channel_only")
-async def verify_channel_only(data: _VerifyIn, user: User = Depends(current_user)):
-    chat = data.tg_chat.strip()
-    if not chat:
-        raise HTTPException(400, "Укажите @username канала")
-    ok, message = await telegram_api.verify_channel(chat)
-    return {"ok": ok, "message": message}
 
 
 @app.post("/api/verify_channel_only")
