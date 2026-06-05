@@ -762,6 +762,101 @@ async def verify_channel_only(data: _VerifyIn, user: User = Depends(current_user
     return {"ok": ok, "message": message}
 
 
+@app.post("/api/verify_channel_only")
+async def verify_channel_only(data: _VerifyIn, user: User = Depends(current_user)):
+    chat = data.tg_chat.strip()
+    if not chat:
+        raise HTTPException(400, "Укажите @username канала")
+    ok, message = await telegram_api.verify_channel(chat)
+    return {"ok": ok, "message": message}
+
+
+@app.patch("/api/me")
+def patch_me(data: _MePatch, user: User = Depends(current_user)):
+    with session() as s:
+        u = s.get(User, user.id)
+        if data.notify_new_post is not None: u.notify_new_post = data.notify_new_post
+        if data.notify_published is not None: u.notify_published = data.notify_published
+        if data.notify_low_tokens is not None: u.notify_low_tokens = data.notify_low_tokens
+        if data.tg_chat_id is not None: u.tg_chat_id = data.tg_chat_id
+        s.add(u); s.commit()
+    return {"ok": True}
+
+
+@app.post("/api/channels/{channel_id}/consult")
+async def consult_channel(channel_id: int, data: _ConsultIn, user: User = Depends(current_user)):
+    with session() as s:
+        ch = s.get(Channel, channel_id)
+        if not ch or ch.user_id != user.id:
+            raise HTTPException(404, "Канал не найден")
+        from database import ChannelRule
+        from sqlmodel import select as sel
+        rules = s.exec(sel(ChannelRule).where(ChannelRule.channel_id == channel_id)).all()
+        rules_text = "\n".join(f"- {r.rule_text}" for r in rules)
+    response, suggested_rule = await generator.consult(ch, data.message, data.history, rules_text)
+    return {"response": response, "suggested_rule": suggested_rule}
+
+
+@app.get("/api/channels/{channel_id}/rules")
+def list_rules(channel_id: int, user: User = Depends(current_user)):
+    from database import ChannelRule
+    from sqlmodel import select as sel
+    with session() as s:
+        ch = s.get(Channel, channel_id)
+        if not ch or ch.user_id != user.id:
+            raise HTTPException(404, "Канал не найден")
+        rules = s.exec(sel(ChannelRule).where(ChannelRule.channel_id == channel_id)).all()
+        return [{"id": r.id, "rule_text": r.rule_text, "created_at": str(r.created_at)} for r in rules]
+
+
+@app.post("/api/channels/{channel_id}/rules")
+def add_rule(channel_id: int, data: _RuleIn, user: User = Depends(current_user)):
+    from database import ChannelRule
+    with session() as s:
+        ch = s.get(Channel, channel_id)
+        if not ch or ch.user_id != user.id:
+            raise HTTPException(404, "Канал не найден")
+        rule = ChannelRule(channel_id=channel_id, rule_text=data.rule_text.strip())
+        s.add(rule); s.commit(); s.refresh(rule)
+        return {"id": rule.id, "rule_text": rule.rule_text}
+
+
+@app.delete("/api/rules/{rule_id}")
+def delete_rule(rule_id: int, user: User = Depends(current_user)):
+    from database import ChannelRule
+    with session() as s:
+        rule = s.get(ChannelRule, rule_id)
+        if not rule:
+            raise HTTPException(404, "Правило не найдено")
+        ch = s.get(Channel, rule.channel_id)
+        if not ch or ch.user_id != user.id:
+            raise HTTPException(403, "Нет доступа")
+        s.delete(rule); s.commit()
+    return {"ok": True}
+
+
+@app.post("/api/bot/start")
+async def bot_start(request: Request):
+    """Webhook для получения /start от бота — привязывает tg_chat_id к аккаунту."""
+    try:
+        data = await request.json()
+        message = data.get("message", {})
+        text = message.get("text", "")
+        chat_id = message.get("chat", {}).get("id")
+        if text.startswith("/start") and chat_id:
+            parts = text.split()
+            if len(parts) > 1 and parts[1].startswith("u"):
+                user_id = int(parts[1][1:])
+                with session() as s:
+                    u = s.get(User, user_id)
+                    if u:
+                        u.tg_chat_id = chat_id
+                        s.add(u); s.commit()
+    except Exception:
+        pass
+    return {"ok": True}
+
+
 @app.get("/legal/offer")
 def legal_offer():
     return FileResponse("static/legal/offer.html")

@@ -22,14 +22,18 @@ class User(SQLModel, table=True):
     password_hash: str
     token_balance: int = 0
     is_admin: bool = False
-    # Подписка
-    plan: str = "free"               # free | starter | pro | business | agency
-    plan_posts_used: int = 0         # постов использовано в этом месяце
+    plan: str = "free"
+    plan_posts_used: int = 0
     plan_reset_at: Optional[datetime] = None
-    # Реферальная программа
-    ref_code: str = ""               # уникальный реферальный код пользователя
+    ref_code: str = ""
     referred_by: Optional[int] = Field(default=None, foreign_key="user.id")
-    ref_bonus_given: bool = False    # получил ли бонус за реферала
+    ref_bonus_given: bool = False
+    # Telegram уведомления
+    tg_chat_id: Optional[int] = None       # числовой id чата с ботом (из /start)
+    tg_username: str = ""                   # для отображения
+    notify_new_post: bool = False
+    notify_published: bool = False
+    notify_low_tokens: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -47,7 +51,6 @@ class Channel(SQLModel, table=True):
     post_length: str = "100-200 слов"
     language: str = "русский"
 
-    # Расширенные настройки
     post_voice: str = "author"
     post_format: str = "story"
     emoji_style: str = "minimal"
@@ -58,12 +61,23 @@ class Channel(SQLModel, table=True):
     auto_publish: bool = False
 
     schedule_kind: str = "interval"
-    interval_hours: int = 12
+    interval_hours: float = 12.0           # float: 0.25=15мин, 0.5=30мин, 1, 3, 6...
+    interval_jitter_minutes: int = 0       # ±N минут рандомизации
+    publish_window_start: str = ""         # "09:00" — начало окна публикации
+    publish_window_end: str = ""           # "22:00" — конец окна
     daily_times: str = '["10:00"]'
 
     enabled: bool = True
-    onboarded: bool = False          # прошёл ли онбординг (выбрал первый пост)
+    onboarded: bool = False
     last_generated_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class ChannelRule(SQLModel, table=True):
+    """Персональные правила стиля канала из диалога с ИИ-консультантом."""
+    id: Optional[int] = Field(default=None, primary_key=True)
+    channel_id: int = Field(foreign_key="channel.id", index=True)
+    rule_text: str
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
@@ -80,12 +94,12 @@ class Post(SQLModel, table=True):
     user_id: int = Field(foreign_key="user.id", index=True)
 
     text: str
-    status: str = "pending"         # pending|scheduled|published|rejected|onboarding
+    status: str = "pending"
     scheduled_at: Optional[datetime] = None
     published_at: Optional[datetime] = None
     tg_message_id: Optional[int] = None
     tokens_used: int = 0
-    post_format: str = ""            # формат поста (для онбординга)
+    post_format: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
