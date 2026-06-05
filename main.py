@@ -749,6 +749,18 @@ def delete_account(user: User = Depends(current_user)):
     return {"ok": True}
 
 
+class VerifyChannelOnly(BaseModel):
+    tg_chat: str
+
+@app.post("/api/verify_channel_only")
+async def verify_channel_only(data: VerifyChannelOnly, user: User = Depends(current_user)):
+    chat = data.tg_chat.strip()
+    if not chat:
+        raise HTTPException(400, "Укажите @username канала")
+    ok, message = await telegram_api.verify_channel(chat)
+    return {"ok": ok, "message": message}
+
+
 @app.get("/legal/offer")
 def legal_offer():
     return FileResponse("static/legal/offer.html")
