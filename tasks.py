@@ -191,7 +191,7 @@ def _next_publish_time(channel: Channel, now: datetime) -> datetime:
 def _is_due(channel: Channel, now: datetime) -> bool:
     if channel.schedule_kind == "interval":
         if channel.last_generated_at is None:
-            # Проверяем окно если задано
+            # Первая генерация — проверяем окно если задано
             ws = channel.publish_window_start
             we = channel.publish_window_end
             if ws and we:
@@ -206,6 +206,11 @@ def _is_due(channel: Channel, now: datetime) -> bool:
                 except Exception:
                     pass
             return True
+        # Строго проверяем что прошёл нужный интервал
+        min_seconds = channel.interval_hours * 3600
+        elapsed = (now - channel.last_generated_at).total_seconds()
+        if elapsed < min_seconds * 0.9:  # 10% допуск
+            return False
         next_time = _next_publish_time(channel, now)
         return now >= next_time
 
@@ -312,25 +317,29 @@ async def tick():
         except Exception as e:
             logger.error(f"tick: канал {cid}: {e}")
 
-    # Держим минимум 3 поста в очереди для всех активных верифицированных каналов
+    # Держим минимум 3 поста в очереди — только для каналов БЕЗ автопубликации
     with session() as s:
-        all_channels = s.exec(select(Channel).where(
-            Channel.enabled == True, Channel.verified == True  # noqa
+        manual_channels = s.exec(select(Channel).where(
+            Channel.enabled == True,   # noqa
+            Channel.verified == True,  # noqa
+            Channel.auto_publish == False  # noqa
         )).all()
-        channel_ids = [c.id for c in all_channels]
+        manual_ids = [c.id for c in manual_channels]
 
-    for cid in channel_ids:
+    for cid in manual_ids:
         try:
             with session() as s:
                 from sqlmodel import select as sel
-                pending_count = s.exec(sel(Post).where(
+                pending = s.exec(sel(Post).where(
                     Post.channel_id == cid,
                     Post.status.in_(["pending", "scheduled"])
                 )).all()
-                count = len(pending_count)
+                count = len(pending)
             if count < MIN_QUEUE:
                 for _ in range(MIN_QUEUE - count):
-                    await generate_for_channel(cid)
+                    result = await generate_for_channel(cid)
+                    if not result.get("ok"):
+                        break
         except Exception as e:
             logger.warning(f"queue-refill канал {cid}: {e}")
 
