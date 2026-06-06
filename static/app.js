@@ -400,7 +400,7 @@ async function renderChannel(){
   App._chan=c;
   const notConnected=!c.tg_chat?`<div style="background:var(--accent-soft);border:1px solid #e8d5bb;border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--accent-dark)">
     📡 Канал не подключён к Telegram.
-    <button class="btn-ghost btn-sm" onclick="setTab('settings')" style="color:var(--accent);font-weight:600">Подключить →</button></div>`:"";
+    <button class="btn-ghost btn-sm" onclick="App.tab='settings';renderChannel()" style="color:var(--accent);font-weight:600">Подключить →</button></div>`:"";
   $("app").innerHTML=topbar("dashboard","все каналы")+`<div class="wrap">
     ${notConnected}
     <div class="chan-header card" style="margin-bottom:16px">
@@ -448,10 +448,12 @@ function renderTimer(){
   if(diff<=0){block.innerHTML=`<div style="font-size:12px;color:var(--green)">⏱ Генерация скоро</div>`;return;}
   const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000),s=Math.floor((diff%60000)/1000);
   const ts=new Date(nextMs).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});
-  block.innerHTML=`<div style="font-size:11px;color:var(--text-faint);margin-bottom:2px">следующий пост через</div>
-    <div style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:500;color:var(--accent)">
+  block.innerHTML=`<div style="text-align:center">
+    <div style="font-size:11px;color:var(--text-faint);margin-bottom:2px">следующий пост через</div>
+    <div style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:500;color:var(--accent);letter-spacing:.05em">
       ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}</div>
-    <div style="font-size:11px;color:var(--text-faint)">в ${ts}</div>`;
+    <div style="font-size:11px;color:var(--text-faint)">в ${ts}</div>
+  </div>`;
   setTimeout(renderTimer,1000);
 }
 
@@ -638,10 +640,14 @@ function renderSettings(){
     </div>
     <div class="card">
       <div class="card-title">Уведомления в Telegram</div>
-      <div class="hint" style="margin-top:0;margin-bottom:14px">
-        Напиши <b>/start</b> боту <a href="https://t.me/${esc(App.cfg?.bot_username||"trpst_bot")}" target="_blank">@${esc(App.cfg?.bot_username||"trpst_bot")}</a>
-        — он свяжет твой аккаунт автоматически.
+      <div class="hint" style="margin-top:0;margin-bottom:12px">
+        Укажи свой Telegram username — бот отправит тестовое сообщение для проверки.
       </div>
+      <div class="row" style="gap:8px;margin-bottom:14px">
+        <input id="f_tg_username" placeholder="@username" value="${esc(App.user?.tg_username||"")}" style="flex:1">
+        <button class="btn-outline btn-sm" onclick="verifyTgUsername()" id="tg_check_btn" style="white-space:nowrap">Проверить</button>
+      </div>
+      <div id="tg_check_msg" style="font-size:13px;margin-bottom:12px"></div>
       <div class="toggle-row">
         <div class="toggle-info"><b>Новый пост сгенерирован</b></div>
         <label class="switch"><input type="checkbox" id="sw_n1" ${App.user?.notify_new_post?"checked":""}><span class="slider"></span></label>
@@ -753,9 +759,9 @@ async function renderAdvanced(){
         <div class="field-label" style="margin-bottom:8px">Окно публикации (UTC)</div>
         <div class="row" style="gap:10px">
           <div style="flex:1"><div style="font-size:11px;color:var(--text-faint);margin-bottom:4px">С</div>
-            <input id="f_ws" type="time" value="${c.publish_window_start||""}"></div>
+            <input id="f_ws" placeholder="09:00" value="${c.publish_window_start||""}"></div>
           <div style="flex:1"><div style="font-size:11px;color:var(--text-faint);margin-bottom:4px">До</div>
-            <input id="f_we" type="time" value="${c.publish_window_end||""}"></div>
+            <input id="f_we" placeholder="22:00" value="${c.publish_window_end||""}"></div>
         </div>
         <div class="hint">Посты публикуются только в это время. Москва = UTC+3.</div>
       </div>
@@ -879,15 +885,17 @@ async function _silentSave(){
   });}catch(_){}
 }
 async function saveChannel(){
+  const newChat=($("f_chat")||{value:App._chan.tg_chat||""}).value.trim();
+  const chatChanged=newChat!==(App._chan.tg_chat||"");
   const payload={
     title:($("f_title")||{value:App._chan.title}).value.trim(),
-    tg_chat:($("f_chat")||{value:""}).value.trim(),
     about:$("f_about")?$("f_about").value:App._chan.about,
     style:$("f_style")?$("f_style").value:App._chan.style,
     post_length:App._chan.post_length,
     use_web_search:$("sw_web")?$("sw_web").checked:App._chan.use_web_search,
     auto_publish:$("sw_auto")?$("sw_auto").checked:App._chan.auto_publish,
   };
+  if(chatChanged) payload.tg_chat=newChat;
   const notif={
     notify_new_post:$("sw_n1")?$("sw_n1").checked:false,
     notify_published:$("sw_n2")?$("sw_n2").checked:false,
@@ -900,20 +908,27 @@ async function saveChannel(){
   }catch(e){toast(e.message,"err");}
 }
 async function saveAdvanced(){
-  const ih=_advInterval||App._chan.interval_hours;
+  const ih=_advInterval!=null?_advInterval:(App._chan.interval_hours||12);
   const payload={
     post_voice:App._chan.post_voice||"author",
     post_format:App._chan.post_format||"story",
     emoji_style:App._chan.emoji_style||"minimal",
     cta_enabled:$("sw_cta")?$("sw_cta").checked:false,
     cta_text:($("f_cta")||{value:""}).value,
-    interval_hours:ih,
-    interval_jitter_minutes:parseInt(($("f_jitter")||{value:0}).value),
+    interval_hours:parseFloat(ih),
+    interval_jitter_minutes:parseInt(($("f_jitter")||{value:0}).value)||0,
     publish_window_start:($("f_ws")||{value:""}).value,
     publish_window_end:($("f_we")||{value:""}).value,
   };
-  try{await api("PATCH","/channels/"+App._chan.id,payload);App._chan={...App._chan,...payload};_advInterval=null;toast("Сохранено ✓","ok");}
-  catch(e){toast(e.message,"err");}
+  try{
+    await api("PATCH","/channels/"+App._chan.id,payload);
+    App._chan={...App._chan,...payload};
+    _advInterval=null;
+    toast("Сохранено ✓","ok");
+  }catch(e){
+    const msg=e&&e.message?e.message:typeof e==="string"?e:"Ошибка сохранения";
+    toast(msg,"err");
+  }
 }
 async function verifyChannel(){
   const chat=($("f_chat")||{value:""}).value.trim();if(!chat) return toast("Введите @username или ссылку","err");
@@ -1038,6 +1053,20 @@ async function deleteAccount(){
 }
 
 // COOKIE + KEYBOARD
+async function verifyTgUsername(){
+  const username=($("f_tg_username")||{value:""}).value.trim();
+  if(!username) return toast("Введи @username","err");
+  const btn=$("tg_check_btn"),msg=$("tg_check_msg");
+  btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;
+  try{
+    const r=await api("POST","/me/verify_tg",{username});
+    msg.textContent=r.message;
+    msg.style.color=r.ok?"var(--green)":"var(--red)";
+    if(r.ok) App.user.tg_username=username;
+  }catch(e){msg.textContent=e.message;msg.style.color="var(--red)";}
+  btn.innerHTML="Проверить";btn.disabled=false;
+}
+
 function initCookieBanner(){
   if(localStorage.getItem("cookie_ok")) return;
   const b=document.createElement("div");
@@ -1074,7 +1103,7 @@ window.toggleExpand=toggleExpand;window.showPicker=showPicker;window.doSchedule=
 window.toggleEdit=toggleEdit;window.savePost=savePost;window.publishPost=publishPost;
 window.rejectPost=rejectPost;window.deletePost=deletePost;window.regenPost=regenPost;
 window.testPost=testPost;window.buy=buy;window.deleteAccount=deleteAccount;
-window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
+window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
 window.ncSelect=ncSelect;window.ncP=ncP;window.ncHz=ncHz;
 window.sendConsult=sendConsult;window.addSuggestedRule=addSuggestedRule;
 window.addRule=addRule;window.deleteRule=deleteRule;
