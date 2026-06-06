@@ -1081,6 +1081,50 @@ async function toggleChannelEnabled(){
   }catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
 }
 
+function showPicker(id){
+  const p=$("picker_"+id);if(!p) return;p.classList.remove("hidden");
+  const dt=$("dt_"+id);if(dt) dt.value=new Date(Date.now()+3600000).toISOString().slice(0,16);
+}
+async function doSchedule(id){
+  const dt=$("dt_"+id);if(!dt||!dt.value) return toast("Выберите дату","err");
+  try{await api("POST","/posts/"+id+"/schedule",{scheduled_at:dt.value});toast("Запланировано ✓","ok");renderQueue();}
+  catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+}
+function toggleEdit(id){
+  const ta=$("pt_"+id),pw=$("ppreview_"+id),sb=$("save_"+id);if(!ta) return;
+  const hidden=ta.classList.contains("hidden");
+  ta.classList.toggle("hidden",!hidden);
+  if(pw) pw.classList.toggle("hidden",hidden);
+  if(sb) sb.classList.toggle("hidden",!hidden);
+}
+async function savePost(id){
+  const el=$("pt_"+id);if(!el) return;
+  try{await api("PATCH","/posts/"+id,{text:el.value});toast("Сохранено ✓","ok");renderQueue();}
+  catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+}
+async function publishPost(id){
+  const ta=$("pt_"+id);
+  if(ta&&!ta.classList.contains("hidden")) try{await api("PATCH","/posts/"+id,{text:ta.value});}catch(_){}
+  try{await api("POST","/posts/"+id+"/publish");toast("Опубликовано ✓","ok");renderQueue();}
+  catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+}
+async function rejectPost(id){
+  try{await api("POST","/posts/"+id+"/reject");renderQueue();}
+  catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+}
+async function deletePost(id){
+  try{await api("DELETE","/posts/"+id);renderQueue();}
+  catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+}
+async function regenPost(id){
+  const btn=$("regen_"+id);if(btn){btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;}
+  try{
+    await api("POST","/posts/"+id+"/reject");
+    const r=await api("POST","/channels/"+App._chan.id+"/generate");
+    toast("Перегенерировано — "+fmt(r.tokens_used)+" токенов","ok");renderQueue();
+  }catch(e){toast(e&&e.message?e.message:"Ошибка","err");if(btn){btn.innerHTML="↻ Заново";btn.disabled=false;}}
+}
+
 function initCookieBanner(){
   if(localStorage.getItem("cookie_ok")) return;
   const b=document.createElement("div");
