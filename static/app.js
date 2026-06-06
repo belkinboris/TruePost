@@ -642,7 +642,7 @@ function renderSettings(){
         ${App.user?.tg_chat_id
           ? '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--green-bg);border-radius:10px;font-size:14px;color:var(--green)">✅ Подключено — уведомления активны</div>'
           : '<div style="font-size:13px;color:var(--text-dim);margin-bottom:10px;line-height:1.6">Нажми кнопку — бот пришлёт приветствие и начнёт отправлять уведомления.</div>'
-            + '<a href="https://t.me/' + esc(App.cfg?.bot_username||"trpst_bot") + '?start=u' + (App.user?.id||"") + '" target="_blank" class="btn" style="display:inline-flex;text-decoration:none;margin-bottom:4px">💬 Подключить уведомления →</a>'
+            + '<button class="btn" onclick="openTgConnect()" style="display:inline-flex;margin-bottom:4px">💬 Подключить уведомления →</button>'
             + '<div class="hint" style="margin-top:8px">Откроется бот — нажми Start</div>'
         }
       </div>
@@ -1125,6 +1125,13 @@ async function regenPost(id){
   }catch(e){toast(e&&e.message?e.message:"Ошибка","err");if(btn){btn.innerHTML="↻ Заново";btn.disabled=false;}}
 }
 
+function openTgConnect(){
+  const uid=App.user?.id;
+  if(!uid){toast("Войдите в аккаунт","err");return;}
+  const bot=App.cfg?.bot_username||"trpst_bot";
+  window.open("https://t.me/"+bot+"?start=u"+uid,"_blank");
+}
+
 function initCookieBanner(){
   if(localStorage.getItem("cookie_ok")) return;
   const b=document.createElement("div");
@@ -1161,7 +1168,7 @@ window.toggleHistory=toggleHistory;window.toggleExpand=toggleExpand;window.showP
 window.toggleEdit=toggleEdit;window.savePost=savePost;window.publishPost=publishPost;
 window.rejectPost=rejectPost;window.deletePost=deletePost;window.regenPost=regenPost;
 window.testPost=testPost;window.buy=buy;window.deleteAccount=deleteAccount;
-window.toggleChannelEnabled=toggleChannelEnabled;window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
+window.openTgConnect=openTgConnect;window.toggleChannelEnabled=toggleChannelEnabled;window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
 window.ncSelect=ncSelect;window.ncP=ncP;window.ncHz=ncHz;
 window.sendConsult=sendConsult;window.addSuggestedRule=addSuggestedRule;
 window.addRule=addRule;window.deleteRule=deleteRule;
