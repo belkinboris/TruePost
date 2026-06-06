@@ -653,7 +653,9 @@ async def buy(data: BuyIn, user: User = Depends(current_user)):
                 pay.status = "failed"
                 s.add(pay)
                 s.commit()
-        raise HTTPException(502, str(exc))
+        error_msg = str(exc)
+        logger.error(f"YooKassa payment error for user {user.id}: {error_msg}")
+        raise HTTPException(400, f"Ошибка оплаты: {error_msg}")
 
     payment_id = yk_payment.get("id", "")
     payment_status = yk_payment.get("status", "pending")

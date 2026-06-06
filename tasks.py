@@ -317,16 +317,15 @@ async def tick():
         except Exception as e:
             logger.error(f"tick: канал {cid}: {e}")
 
-    # Держим минимум 3 поста в очереди — только для каналов БЕЗ автопубликации
+    # Держим минимум 3 поста в очереди для ВСЕХ верифицированных каналов
     with session() as s:
-        manual_channels = s.exec(select(Channel).where(
+        all_verified = s.exec(select(Channel).where(
             Channel.enabled == True,   # noqa
             Channel.verified == True,  # noqa
-            Channel.auto_publish == False  # noqa
         )).all()
-        manual_ids = [c.id for c in manual_channels]
+        all_verified_ids = [c.id for c in all_verified]
 
-    for cid in manual_ids:
+    for cid in all_verified_ids:
         try:
             with session() as s:
                 from sqlmodel import select as sel
@@ -336,10 +335,24 @@ async def tick():
                 )).all()
                 count = len(pending)
             if count < MIN_QUEUE:
-                for _ in range(MIN_QUEUE - count):
-                    result = await generate_for_channel(cid)
-                    if not result.get("ok"):
-                        break
+                # Генерируем без автопубликации — чтобы посты были видны в очереди
+                with session() as s:
+                    ch = s.get(Channel, cid)
+                    orig_auto = ch.auto_publish
+                    ch.auto_publish = False
+                    s.add(ch); s.commit()
+                try:
+                    for _ in range(MIN_QUEUE - count):
+                        result = await generate_for_channel(cid)
+                        if not result.get("ok"):
+                            break
+                finally:
+                    # Восстанавливаем auto_publish
+                    with session() as s:
+                        ch = s.get(Channel, cid)
+                        if ch:
+                            ch.auto_publish = orig_auto
+                            s.add(ch); s.commit()
         except Exception as e:
             logger.warning(f"queue-refill канал {cid}: {e}")
 
