@@ -24,7 +24,7 @@ class ChannelIn(BaseModel):
     use_web_search: bool = True
     auto_publish: bool = False
     schedule_kind: str = "interval"
-    interval_hours: int = 12
+    interval_hours: float = 12
     daily_times: list[str] = ["10:00"]
     enabled: bool = True
     onboarded: bool = False
@@ -46,7 +46,7 @@ class ChannelPatch(BaseModel):
     use_web_search: Optional[bool] = None
     auto_publish: Optional[bool] = None
     schedule_kind: Optional[str] = None
-    interval_hours: Optional[int] = None
+    interval_hours: Optional[float] = None
     daily_times: Optional[list[str]] = None
     enabled: Optional[bool] = None
     onboarded: Optional[bool] = None
