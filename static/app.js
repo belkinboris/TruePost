@@ -993,7 +993,7 @@ async function renderBilling(){
   $("app").innerHTML=topbar("dashboard","назад")+`<div class="wrap">
     <div class="page-head"><h1>Тарифы</h1>
       <p>Баланс: <b class="mono">${fmt(App.user?.token_balance||0)}</b> токенов · ≈${Math.floor((App.user?.token_balance||0)/5000)} постов</p></div>
-    ${!App.cfg?.yoomoney_enabled?`<div class="card" style="border-color:var(--accent);background:var(--accent-soft);margin-bottom:16px">
+    ${(!App.cfg?.yookassa_enabled&&!App.cfg?.yoomoney_enabled)?`<div class="card" style="border-color:var(--accent);background:var(--accent-soft);margin-bottom:16px">
       <p style="color:var(--accent-dark)">Приём платежей настраивается.</p></div>`:""}
     <div class="grid grid-2" style="margin-bottom:16px">
       ${plans.map(p=>`<div class="price-card" style="position:relative;${p.popular?"border-color:var(--accent)":""}">
@@ -1045,8 +1045,20 @@ async function renderBilling(){
 }
 
 async function buy(pid){
-  try{const r=await api("POST","/billing/buy",{package_id:pid});window.open(r.payment_url,"_blank");}
-  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
+  // Safari блокирует window.open после await — открываем окно заранее
+  const win = window.open("", "_blank");
+  try{
+    const r = await api("POST", "/billing/buy", {package_id: pid});
+    if(win && r.payment_url){
+      win.location.href = r.payment_url;
+    } else {
+      if(win) win.close();
+      toast("Не удалось получить ссылку на оплату", "err");
+    }
+  } catch(e){
+    if(win) win.close();
+    toast(e&&e.message?e.message:"Ошибка запроса","err");
+  }
 }
 async function deleteAccount(){
   if(!confirm("Удалить аккаунт?\n\nЭто удалит все каналы, посты и данные.")) return;
