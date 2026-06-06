@@ -496,6 +496,13 @@ function toggleHistory(){
   if(arrow) arrow.textContent=hidden?"▼":"▶";
 }
 
+function toggleExpand(id){
+  const pb=$("pb_"+id),btn=$("pexp_"+id);if(!pb||!btn) return;
+  const short=pb.classList.contains("post-preview-short");
+  pb.classList.toggle("post-preview-short",!short);
+  btn.textContent=short?"Свернуть ↑":"Читать полностью ↓";
+}
+
 function renderPostCard(p){
   const when=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
   const editable=p.status==="pending"||p.status==="onboarding";
