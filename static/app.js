@@ -416,7 +416,11 @@ async function renderChannel(){
         </div>
         <div style="text-align:right">
           <div id="timer_block"></div>
-          <button class="btn btn-sm" style="margin-top:8px" onclick="openGenPanel()">✦ Создать пост</button>
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+            <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
+            <button class="${c.enabled?'btn-outline btn-sm':'btn btn-sm'}" onclick="toggleChannelEnabled()"
+              id="pause_btn">${c.enabled?'⏸ Пауза':'▶ Возобновить'}</button>
+          </div>
         </div>
       </div>
     </div>
@@ -617,19 +621,12 @@ function renderSettings(){
     </div>
     <div class="card">
       <div class="card-title">Уведомления в Telegram</div>
-      <div style="margin-bottom:14px">
+      <div style="margin-bottom:14px" id="tg_notif_block">
         ${App.user?.tg_chat_id
-          ? `<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--green-bg);border-radius:10px;font-size:14px;color:var(--green)">
-              ✅ Подключено — уведомления активны
-             </div>`
-          : `<div style="font-size:13px;color:var(--text-dim);margin-bottom:10px;line-height:1.6">
-              Нажми кнопку — бот пришлёт приветствие и начнёт отправлять уведомления.
-             </div>
-             <a href="https://t.me/${esc(App.cfg?.bot_username||"trpst_bot")}?start=u${App.user?.id||""}"
-               target="_blank" class="btn" style="display:inline-flex;text-decoration:none;margin-bottom:4px">
-               💬 Подключить уведомления →
-             </a>
-             <div class="hint" style="margin-top:8px">Откроется бот — нажми Start</div>`
+          ? '<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--green-bg);border-radius:10px;font-size:14px;color:var(--green)">✅ Подключено — уведомления активны</div>'
+          : '<div style="font-size:13px;color:var(--text-dim);margin-bottom:10px;line-height:1.6">Нажми кнопку — бот пришлёт приветствие и начнёт отправлять уведомления.</div>'
+            + '<a href="https://t.me/' + esc(App.cfg?.bot_username||"trpst_bot") + '?start=u' + (App.user?.id||"") + '" target="_blank" class="btn" style="display:inline-flex;text-decoration:none;margin-bottom:4px">💬 Подключить уведомления →</a>'
+            + '<div class="hint" style="margin-top:8px">Откроется бот — нажми Start</div>'
         }
       </div>
       <div class="toggle-row">
@@ -816,10 +813,14 @@ async function sendConsult(){
     App._consultHistory.push({role:"assistant",content:r.response});
     msgs.insertAdjacentHTML("beforeend",`<div style="align-self:flex-start;background:var(--surface2);border-radius:12px 12px 12px 4px;padding:10px 14px;max-width:85%;font-size:14px">
       ${esc(r.response)}
-      ${r.suggested_rule?`<div style="margin-top:10px;padding:8px 12px;background:var(--green-bg);border-radius:8px;font-size:13px">
-        <b>Предлагаю правило:</b> ${esc(r.suggested_rule)}<br>
-        <button class="btn btn-sm" style="margin-top:6px;background:var(--green);color:#fff"
-          onclick="addSuggestedRule(${JSON.stringify(r.suggested_rule)})">Добавить правило</button></div>`:""}
+      ${r.suggested_rule ? (()=>{
+        const rid="sr_"+Date.now();
+        window["_sr_"+rid]=r.suggested_rule;
+        return '<div style="margin-top:10px;padding:8px 12px;background:var(--green-bg);border-radius:8px;font-size:13px">'
+          +'<b>Предлагаю правило:</b> '+esc(r.suggested_rule)+'<br>'
+          +'<button class="btn btn-sm" style="margin-top:6px;background:var(--green);color:#fff" '
+          +'onclick="addSuggestedRule(window[\'_sr_'+rid+'\'])">Добавить правило</button></div>';
+      })() : ""}
     </div>`);
     msgs.scrollTop=msgs.scrollHeight;
   }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
@@ -1051,6 +1052,18 @@ async function verifyTgUsername(){
   btn.innerHTML="Проверить";btn.disabled=false;
 }
 
+async function toggleChannelEnabled(){
+  const c=App._chan;
+  const newVal=!c.enabled;
+  try{
+    await api("PATCH","/channels/"+c.id,{enabled:newVal});
+    App._chan.enabled=newVal;
+    const btn=$("pause_btn");
+    if(btn){btn.textContent=newVal?"⏸ Пауза":"▶ Возобновить";btn.className=newVal?"btn-outline btn-sm":"btn btn-sm";}
+    toast(newVal?"Канал запущен":"Публикация приостановлена","ok");
+  }catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+}
+
 function initCookieBanner(){
   if(localStorage.getItem("cookie_ok")) return;
   const b=document.createElement("div");
@@ -1087,7 +1100,7 @@ window.toggleHistory=toggleHistory;window.toggleExpand=toggleExpand;window.showP
 window.toggleEdit=toggleEdit;window.savePost=savePost;window.publishPost=publishPost;
 window.rejectPost=rejectPost;window.deletePost=deletePost;window.regenPost=regenPost;
 window.testPost=testPost;window.buy=buy;window.deleteAccount=deleteAccount;
-window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
+window.toggleChannelEnabled=toggleChannelEnabled;window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
 window.ncSelect=ncSelect;window.ncP=ncP;window.ncHz=ncHz;
 window.sendConsult=sendConsult;window.addSuggestedRule=addSuggestedRule;
 window.addRule=addRule;window.deleteRule=deleteRule;
