@@ -385,3 +385,7 @@ body { overflow-x: hidden; position: relative; }
 @supports(padding-bottom:env(safe-area-inset-bottom)){
   body { padding-bottom: env(safe-area-inset-bottom); }
 }
+
+/* ── Back link darker ────────────────────────── */
+.back-link { color: var(--text-dim) !important; font-weight: 500; }
+.back-link:hover { color: var(--text) !important; }

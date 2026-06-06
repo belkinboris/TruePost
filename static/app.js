@@ -148,7 +148,7 @@ async function renderDashboard(){
     <div id="dash_footer"></div></div>`;
   const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
   let chans=[];
-  try{chans=await api("GET","/channels");}catch(e){toast(e.message,"err");}
+  try{chans=await api("GET","/channels");}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
   if(!chans.length){
     $("chans").innerHTML=`<div class="add-card" onclick="go('new_channel')" style="grid-column:1/-1;max-width:320px">
       <div class="plus">+</div><div style="font-weight:500">Добавить первый канал</div>
@@ -310,7 +310,7 @@ async function ncAnalyze(){
     $("nc_sp").textContent=_ncStyleProfile.replace(/#{1,3} /g,"").replace(/\*\*/g,"");
     $("nc_sp").classList.remove("hidden");
     toast("Стиль изучен","ok");
-  }catch(e){toast(e.message,"err");}
+  }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
   btn.innerHTML="Изучить";btn.disabled=false;
 }
 
@@ -332,7 +332,7 @@ async function ncGenerate(){
       post_voice:_ncVoice,post_format:_ncFormat,
       emoji_style:_ncEmoji,cta_enabled:_ncCta,cta_text:_ncCtaText,
     });
-  }catch(e){toast(e.message,"err");btn.innerHTML="✦ Сгенерировать три варианта поста";btn.disabled=false;return;}
+  }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");btn.innerHTML="✦ Сгенерировать три варианта поста";btn.disabled=false;return;}
   App.channelId=chan.id;App._onboardPosts=[];
 
   $("nc_results").classList.remove("hidden");
@@ -387,7 +387,7 @@ async function ncSelect(idx){
     }
     await api("PATCH",`/channels/${App.channelId}`,{onboarded:true});
     toast("Канал настроен ✓","ok");go("channel",App.channelId);
-  }catch(e){toast(e.message,"err");}
+  }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 
 // CHANNEL
@@ -395,7 +395,7 @@ async function renderChannel(){
   await refreshUser();
   let c;
   try{c=await api("GET","/channels/"+App.channelId);}
-  catch(e){toast(e.message,"err");return go("dashboard");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");return go("dashboard");}
   try{c.daily_times=JSON.parse(c.daily_times||"[]");}catch(_){c.daily_times=[];}
   App._chan=c;
   const notConnected=!c.tg_chat?`<div style="background:var(--accent-soft);border:1px solid #e8d5bb;border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--accent-dark)">
@@ -553,7 +553,7 @@ function showPicker(id){
 async function doSchedule(id){
   const dt=$("dt_"+id);if(!dt||!dt.value) return toast("Выберите дату","err");
   try{await api("POST","/posts/"+id+"/schedule",{scheduled_at:dt.value});toast("Запланировано ✓","ok");renderQueue();}
-  catch(e){toast(e.message,"err");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 function toggleEdit(id){
   const ta=$("pt_"+id),pw=$("ppreview_"+id),sb=$("save_"+id);if(!ta) return;
@@ -565,19 +565,19 @@ function toggleEdit(id){
 async function savePost(id){
   const el=$("pt_"+id);if(!el) return;
   try{await api("PATCH","/posts/"+id,{text:el.value});toast("Сохранено ✓","ok");renderQueue();}
-  catch(e){toast(e.message,"err");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function publishPost(id){
   const ta=$("pt_"+id);
   if(ta&&!ta.classList.contains("hidden")) try{await api("PATCH","/posts/"+id,{text:ta.value});}catch(_){}
   try{await api("POST","/posts/"+id+"/publish");toast("Опубликовано ✓","ok");renderQueue();}
-  catch(e){toast(e.message,"err");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function rejectPost(id){
-  try{await api("POST","/posts/"+id+"/reject");renderQueue();}catch(e){toast(e.message,"err");}
+  try{await api("POST","/posts/"+id+"/reject");renderQueue();}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function deletePost(id){
-  try{await api("DELETE","/posts/"+id);renderQueue();}catch(e){toast(e.message,"err");}
+  try{await api("DELETE","/posts/"+id);renderQueue();}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function regenPost(id){
   const btn=$("regen_"+id);if(btn){btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;}
@@ -585,7 +585,7 @@ async function regenPost(id){
     await api("POST","/posts/"+id+"/reject");
     const r=await api("POST","/channels/"+App._chan.id+"/generate");
     toast(`Перегенерировано — ${fmt(r.tokens_used)} токенов`,"ok");renderQueue();
-  }catch(e){toast(e.message,"err");if(btn){btn.innerHTML="↻ Заново";btn.disabled=false;}}
+  }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");if(btn){btn.innerHTML="↻ Заново";btn.disabled=false;}}
 }
 
 // SETTINGS
@@ -687,7 +687,7 @@ async function testPost(){
         <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Опубликовать</button>
         <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Удалить</button>
       </div></div>`;
-  }catch(e){toast(e.message,"err");}
+  }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
   btn.innerHTML="▷ Создать тестовый пост";btn.disabled=false;
 }
 
@@ -838,29 +838,29 @@ async function sendConsult(){
           onclick="addSuggestedRule(${JSON.stringify(r.suggested_rule)})">Добавить правило</button></div>`:""}
     </div>`);
     msgs.scrollTop=msgs.scrollHeight;
-  }catch(e){toast(e.message,"err");}
+  }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
   btn.innerHTML="→";btn.disabled=false;
 }
 
 async function addSuggestedRule(text){
   try{await api("POST","/channels/"+App._chan.id+"/rules",{rule_text:text});toast("Правило добавлено ✓","ok");renderAdvanced();}
-  catch(e){toast(e.message,"err");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function addRule(){
   const text=($("new_rule")||{value:""}).value.trim();if(!text) return;
   try{await api("POST","/channels/"+App._chan.id+"/rules",{rule_text:text});$("new_rule").value="";renderAdvanced();}
-  catch(e){toast(e.message,"err");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function deleteRule(id){
-  try{await api("DELETE","/rules/"+id);renderAdvanced();}catch(e){toast(e.message,"err");}
+  try{await api("DELETE","/rules/"+id);renderAdvanced();}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function addSource(){
   const url=($("srcUrl")||{value:""}).value.trim();if(!url) return;
   try{await api("POST","/channels/"+App._chan.id+"/sources",{url});$("srcUrl").value="";renderAdvanced();}
-  catch(e){toast(e.message,"err");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function delSource(id){
-  try{await api("DELETE","/sources/"+id);renderAdvanced();}catch(e){toast(e.message,"err");}
+  try{await api("DELETE","/sources/"+id);renderAdvanced();}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 
 // SHARED ACTIONS
@@ -905,7 +905,7 @@ async function saveChannel(){
     await api("PATCH","/channels/"+App._chan.id,payload);
     await api("PATCH","/me",notif);
     toast("Сохранено ✓","ok");renderChannel();
-  }catch(e){toast(e.message,"err");}
+  }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function saveAdvanced(){
   const ih=_advInterval!=null?_advInterval:(App._chan.interval_hours||12);
@@ -955,7 +955,7 @@ async function analyzeChannel(){
 async function deleteChannel(){
   if(!confirm("Удалить канал и все посты?")) return;
   try{await api("DELETE","/channels/"+App._chan.id);toast("Удалено","ok");go("dashboard");}
-  catch(e){toast(e.message,"err");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function generateNow(){
   const about=App._chan.about||"";if(!about.trim()) return toast("Заполните тему канала","err");
@@ -1044,12 +1044,12 @@ async function renderBilling(){
 
 async function buy(pid){
   try{const r=await api("POST","/billing/buy",{package_id:pid});window.open(r.payment_url,"_blank");}
-  catch(e){toast(e.message,"err");}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function deleteAccount(){
   if(!confirm("Удалить аккаунт?\n\nЭто удалит все каналы, посты и данные.")) return;
   if(prompt("Введите DELETE:")!=="DELETE") return toast("Отменено");
-  try{await api("DELETE","/me");toast("Удалено","ok");logout();}catch(e){toast(e.message,"err");}
+  try{await api("DELETE","/me");toast("Удалено","ok");logout();}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 
 // COOKIE + KEYBOARD
