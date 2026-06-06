@@ -98,7 +98,7 @@ function renderAuth(mode="login"){
 
 // TOPBAR
 function topbar(backView,backLabel){
-  const back=backView?`<div class="back-row"><button class="back-link" onclick="go('${backView}')">← ${backLabel||"назад"}</button></div>`:"";
+  const back=backView?`<div class="back-row"><button class="back-link" onclick="go('${backView}')" style="color:var(--text);font-weight:600;font-size:14px">← ${backLabel||"назад"}</button></div>`:"";
   const low=App.user&&App.user.token_balance<20000;
   const lowBanner=low?`<div style="background:#fef3c7;border-bottom:1px solid #f59e0b;padding:8px 20px;font-size:13px;text-align:center;color:#92400e">
     ⚠️ Токены заканчиваются — осталось ~1 пост.
@@ -474,15 +474,18 @@ function renderTab(){
 }
 
 // QUEUE
-async function renderQueue(){
-  $("tabbody").innerHTML=`<div id="postList"><div class="text-faint" style="padding:20px">Загрузка…</div></div>`;
-  let posts=[];
-  try{posts=await api("GET","/channels/"+App._chan.id+"/posts");}catch(e){}
-  if(!posts.length){
-    $("postList").innerHTML=`<div class="empty">
-      <div class="empty-icon">✦</div><h3>Очередь пуста</h3>
-      <p>Нажми «Создать пост» или подожди авто-генерацию.</p></div>`;return;
-  }
+function toggleHistory(){
+  const list=$("history_list"),arrow=$("history_arrow");
+  if(!list) return;
+  const hidden=list.classList.contains("hidden");
+  list.classList.toggle("hidden",!hidden);
+  if(arrow) arrow.textContent=hidden?"▼":"▶";
+}
+
+function renderPostCard(p){
+  const when=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+  const editable=p.status==="pending"||p.status==="onboarding";
+  const sched=p.status==="scheduled";
   const sc={
     pending:`<span class="chip chip-orange">на проверке</span>`,
     scheduled:`<span class="chip chip-blue">запланирован</span>`,
@@ -490,103 +493,77 @@ async function renderQueue(){
     rejected:`<span class="chip chip-gray">удалён</span>`,
     onboarding:`<span class="chip chip-blue">онбординг</span>`,
   };
-  $("postList").innerHTML=posts.map(p=>{
-    const when=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-    const editable=p.status==="pending"||p.status==="onboarding";
-    const sched=p.status==="scheduled";
-    let schedInfo="";
-    if(sched&&p.scheduled_at){
-      const sd=new Date(p.scheduled_at+"Z");const diff=sd-Date.now();
-      const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
-      const ts=sd.toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-      schedInfo=`<div style="font-size:12px;color:var(--blue);margin-top:6px">⏰ Выйдет ${diff>0?(h>0?h+"ч ":"")+m+"м":"скоро"} — в ${ts}</div>`;
-    }
-    let actions="";
-    if(editable) actions=`
-      <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Опубликовать сейчас</button>
-      <button class="btn-outline btn-sm" onclick="showPicker(${p.id})">⏰ Запланировать</button>
-      <button class="btn-outline btn-sm" onclick="regenPost(${p.id})" id="regen_${p.id}">↻ Заново</button>
-      <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Удалить</button>`;
-    else if(sched) actions=`
-      <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Сейчас</button>
-      <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Снять</button>`;
-    else actions=`<button class="btn-ghost btn-sm" onclick="deletePost(${p.id})">Удалить</button>`;
+  let schedInfo="";
+  if(sched&&p.scheduled_at){
+    const sd=new Date(p.scheduled_at+"Z");const diff=sd-Date.now();
+    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
+    const ts=sd.toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+    schedInfo=`<div style="font-size:12px;color:var(--blue);margin-top:6px">⏰ ${diff>0?(h>0?h+"ч ":"")+m+"м":"скоро"} — в ${ts}</div>`;
+  }
+  let actions="";
+  if(editable) actions=`
+    <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Опубликовать сейчас</button>
+    <button class="btn-outline btn-sm" onclick="showPicker(${p.id})">⏰ Запланировать</button>
+    <button class="btn-outline btn-sm" onclick="regenPost(${p.id})" id="regen_${p.id}">↻ Заново</button>
+    <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Удалить</button>`;
+  else if(sched) actions=`
+    <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Сейчас</button>
+    <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Снять</button>`;
+  else actions=`<button class="btn-ghost btn-sm" onclick="deletePost(${p.id})">Удалить</button>`;
 
-    return `<div class="post-card" id="pc_${p.id}">
-      <div class="post-header">
-        <div class="row" style="gap:8px;flex-wrap:wrap">${sc[p.status]||""}
-          <span class="text-faint mono" style="font-size:11px">${when}</span></div>
-        <span class="text-faint mono" style="font-size:11px">${fmt(p.tokens_used)} ток.</span>
+  return `<div class="post-card" id="pc_${p.id}">
+    <div class="post-header">
+      <div class="row" style="gap:8px;flex-wrap:wrap">${sc[p.status]||""}
+        <span class="text-faint mono" style="font-size:11px">${when}</span></div>
+      <span class="text-faint mono" style="font-size:11px">${fmt(p.tokens_used)} ток.</span>
+    </div>
+    ${schedInfo}
+    <div id="ppreview_${p.id}" style="position:relative">
+      <div id="pb_${p.id}" class="post-body post-preview-short" style="margin-top:8px">${renderTg(p.text)}</div>
+      <button id="pexp_${p.id}" class="expand-btn" onclick="toggleExpand(${p.id})">Читать полностью ↓</button>
+    </div>
+    ${editable?`<textarea id="pt_${p.id}" class="post-body hidden" style="width:100%;min-height:120px;margin-top:8px">${esc(p.text)}</textarea>`:""}
+    <div id="picker_${p.id}" class="hidden" style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border-soft)">
+      <div class="field-label" style="margin-bottom:6px">Дата и время (UTC)</div>
+      <div class="row" style="gap:8px">
+        <input type="datetime-local" id="dt_${p.id}" style="flex:1">
+        <button class="btn btn-sm" onclick="doSchedule(${p.id})">Запланировать</button>
+        <button class="btn-ghost btn-sm" onclick="$('picker_${p.id}').classList.add('hidden')">✕</button>
       </div>
-      ${schedInfo}
-      <div id="ppreview_${p.id}" style="position:relative">
-        <div id="pb_${p.id}" class="post-body post-preview-short" style="margin-top:8px">${renderTg(p.text)}</div>
-        <button id="pexp_${p.id}" class="expand-btn" onclick="toggleExpand(${p.id})">Читать полностью ↓</button>
-      </div>
-      ${editable?`<textarea id="pt_${p.id}" class="post-body hidden" style="width:100%;min-height:120px;margin-top:8px">${esc(p.text)}</textarea>`:""}
-      <div id="picker_${p.id}" class="hidden" style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border-soft)">
-        <div class="field-label" style="margin-bottom:6px">Дата и время (UTC, Москва = UTC+3)</div>
-        <div class="row" style="gap:8px">
-          <input type="datetime-local" id="dt_${p.id}" style="flex:1">
-          <button class="btn btn-sm" onclick="doSchedule(${p.id})">Запланировать</button>
-          <button class="btn-ghost btn-sm" onclick="$('picker_${p.id}').classList.add('hidden')">✕</button>
-        </div>
-      </div>
-      <div class="post-actions" style="margin-top:10px">
-        ${editable?`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">✏️ Редактировать</button>
-          <button class="btn-ghost btn-sm hidden" id="save_${p.id}" onclick="savePost(${p.id})">💾 Сохранить</button>`:""}
-        ${actions}
-      </div></div>`;
-  }).join("");
+    </div>
+    <div class="post-actions" style="margin-top:10px">
+      ${editable?`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">✏️ Редактировать</button>
+        <button class="btn-ghost btn-sm hidden" id="save_${p.id}" onclick="savePost(${p.id})">💾 Сохранить</button>`:""}
+      ${actions}
+    </div></div>`;
 }
 
-function toggleExpand(id){
-  const pb=$("pb_"+id),btn=$("pexp_"+id);if(!pb||!btn) return;
-  const short=pb.classList.contains("post-preview-short");
-  pb.classList.toggle("post-preview-short",!short);
-  btn.textContent=short?"Свернуть ↑":"Читать полностью ↓";
+async function renderQueue(){
+  $("tabbody").innerHTML=`<div id="postList"><div class="text-faint" style="padding:20px">Загрузка…</div></div>`;
+  let posts=[];
+  try{posts=await api("GET","/channels/"+App._chan.id+"/posts");}catch(e){}
+
+  const pending=posts.filter(p=>p.status==="pending"||p.status==="onboarding"||p.status==="scheduled");
+  const history=posts.filter(p=>p.status==="published"||p.status==="rejected");
+
+  let html="";
+  if(!pending.length){
+    html+=`<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
+  } else {
+    html+=pending.map(p=>renderPostCard(p)).join("");
+  }
+  if(history.length){
+    html+=`<div style="margin-top:20px">
+      <button onclick="toggleHistory()" id="history_btn"
+        style="background:none;border:none;cursor:pointer;font-size:13px;color:var(--text-faint);font-weight:500;padding:8px 0;display:flex;align-items:center;gap:6px">
+        📁 История публикаций (${history.length}) <span id="history_arrow">▶</span>
+      </button>
+      <div id="history_list" class="hidden">${history.map(p=>renderPostCard(p)).join("")}</div>
+    </div>`;
+  }
+  $("postList").innerHTML=html;
 }
-function showPicker(id){
-  const p=$("picker_"+id);if(!p) return;p.classList.remove("hidden");
-  const dt=$("dt_"+id);if(dt) dt.value=new Date(Date.now()+3600000).toISOString().slice(0,16);
-}
-async function doSchedule(id){
-  const dt=$("dt_"+id);if(!dt||!dt.value) return toast("Выберите дату","err");
-  try{await api("POST","/posts/"+id+"/schedule",{scheduled_at:dt.value});toast("Запланировано ✓","ok");renderQueue();}
-  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
-}
-function toggleEdit(id){
-  const ta=$("pt_"+id),pw=$("ppreview_"+id),sb=$("save_"+id);if(!ta) return;
-  const hidden=ta.classList.contains("hidden");
-  ta.classList.toggle("hidden",!hidden);
-  if(pw) pw.classList.toggle("hidden",hidden);
-  if(sb) sb.classList.toggle("hidden",!hidden);
-}
-async function savePost(id){
-  const el=$("pt_"+id);if(!el) return;
-  try{await api("PATCH","/posts/"+id,{text:el.value});toast("Сохранено ✓","ok");renderQueue();}
-  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
-}
-async function publishPost(id){
-  const ta=$("pt_"+id);
-  if(ta&&!ta.classList.contains("hidden")) try{await api("PATCH","/posts/"+id,{text:ta.value});}catch(_){}
-  try{await api("POST","/posts/"+id+"/publish");toast("Опубликовано ✓","ok");renderQueue();}
-  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
-}
-async function rejectPost(id){
-  try{await api("POST","/posts/"+id+"/reject");renderQueue();}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
-}
-async function deletePost(id){
-  try{await api("DELETE","/posts/"+id);renderQueue();}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
-}
-async function regenPost(id){
-  const btn=$("regen_"+id);if(btn){btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;}
-  try{
-    await api("POST","/posts/"+id+"/reject");
-    const r=await api("POST","/channels/"+App._chan.id+"/generate");
-    toast(`Перегенерировано — ${fmt(r.tokens_used)} токенов`,"ok");renderQueue();
-  }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");if(btn){btn.innerHTML="↻ Заново";btn.disabled=false;}}
-}
+
 
 // SETTINGS
 function renderSettings(){
@@ -640,14 +617,21 @@ function renderSettings(){
     </div>
     <div class="card">
       <div class="card-title">Уведомления в Telegram</div>
-      <div class="hint" style="margin-top:0;margin-bottom:12px">
-        Укажи свой Telegram username — бот отправит тестовое сообщение для проверки.
+      <div style="margin-bottom:14px">
+        ${App.user?.tg_chat_id
+          ? `<div style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--green-bg);border-radius:10px;font-size:14px;color:var(--green)">
+              ✅ Подключено — уведомления активны
+             </div>`
+          : `<div style="font-size:13px;color:var(--text-dim);margin-bottom:10px;line-height:1.6">
+              Нажми кнопку — бот пришлёт приветствие и начнёт отправлять уведомления.
+             </div>
+             <a href="https://t.me/${esc(App.cfg?.bot_username||"trpst_bot")}?start=u${App.user?.id||""}"
+               target="_blank" class="btn" style="display:inline-flex;text-decoration:none;margin-bottom:4px">
+               💬 Подключить уведомления →
+             </a>
+             <div class="hint" style="margin-top:8px">Откроется бот — нажми Start</div>`
+        }
       </div>
-      <div class="row" style="gap:8px;margin-bottom:14px">
-        <input id="f_tg_username" placeholder="@username" value="${esc(App.user?.tg_username||"")}" style="flex:1">
-        <button class="btn-outline btn-sm" onclick="verifyTgUsername()" id="tg_check_btn" style="white-space:nowrap">Проверить</button>
-      </div>
-      <div id="tg_check_msg" style="font-size:13px;margin-bottom:12px"></div>
       <div class="toggle-row">
         <div class="toggle-info"><b>Новый пост сгенерирован</b></div>
         <label class="switch"><input type="checkbox" id="sw_n1" ${App.user?.notify_new_post?"checked":""}><span class="slider"></span></label>
@@ -1099,7 +1083,7 @@ window.saveChannel=saveChannel;window.saveAdvanced=saveAdvanced;
 window.verifyChannel=verifyChannel;window.analyzeChannel=analyzeChannel;
 window.deleteChannel=deleteChannel;window.openGenPanel=openGenPanel;window.generateNow=generateNow;
 window.addSource=addSource;window.delSource=delSource;
-window.toggleExpand=toggleExpand;window.showPicker=showPicker;window.doSchedule=doSchedule;
+window.toggleHistory=toggleHistory;window.toggleExpand=toggleExpand;window.showPicker=showPicker;window.doSchedule=doSchedule;
 window.toggleEdit=toggleEdit;window.savePost=savePost;window.publishPost=publishPost;
 window.rejectPost=rejectPost;window.deletePost=deletePost;window.regenPost=regenPost;
 window.testPost=testPost;window.buy=buy;window.deleteAccount=deleteAccount;
