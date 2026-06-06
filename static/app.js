@@ -1,3 +1,13 @@
+window.onerror = function(msg, src, line, col, err) {
+  document.body.innerHTML = '<div style="padding:20px;font-family:monospace;color:red">'
+    + '<b>JS Error:</b><br>' + msg + '<br>Line: ' + line + '</div>';
+  return false;
+};
+window.addEventListener('unhandledrejection', function(e) {
+  document.body.innerHTML = '<div style="padding:20px;font-family:monospace;color:red">'
+    + '<b>Promise Error:</b><br>' + (e.reason?.message || e.reason) + '</div>';
+});
+
 // Автопост SPA — полная версия
 const App = {
   token: localStorage.getItem("ap_token"),
