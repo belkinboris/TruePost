@@ -138,6 +138,12 @@ async def publish_post(post_id: int) -> dict:
         if user and user.notify_published:
             await _notify_user(user, f"✅ <b>Пост опубликован</b>\n\nКанал: {channel.title if channel else ''}")
 
+    # Автодогенерация: держим минимум 3 поста в очереди
+    try:
+        await _ensure_queue(post_id)
+    except Exception as e:
+        logger.warning(f"auto-refill failed: {e}")
+
     return {"ok": True, "message": "Опубликовано"}
 
 
@@ -207,8 +213,85 @@ def _is_due(channel: Channel, now: datetime) -> bool:
     return False
 
 
+_last_update_id = 0
+
+async def _process_bot_updates():
+    """Получает обновления от бота и привязывает chat_id к аккаунтам."""
+    global _last_update_id
+    import telegram_api as tg
+    result = await tg._call("getUpdates", {
+        "offset": _last_update_id + 1,
+        "timeout": 0,
+        "limit": 100,
+        "allowed_updates": ["message"]
+    })
+    if not result.get("ok"):
+        return
+    updates = result.get("result", [])
+    for upd in updates:
+        _last_update_id = upd["update_id"]
+        msg = upd.get("message", {})
+        text = msg.get("text", "")
+        chat_id = msg.get("chat", {}).get("id")
+        if not text.startswith("/start") or not chat_id:
+            continue
+        parts = text.strip().split()
+        user_id = None
+        if len(parts) > 1 and parts[1].startswith("u"):
+            try:
+                user_id = int(parts[1][1:])
+            except ValueError:
+                pass
+        if user_id:
+            with session() as s:
+                u = s.get(User, user_id)
+                if u and u.tg_chat_id != chat_id:
+                    u.tg_chat_id = chat_id
+                    s.add(u); s.commit()
+                    # Приветствие
+                    await tg.send_notification(chat_id,
+                        "✅ Аккаунт подключён! Теперь буду присылать уведомления об Автопост.")
+                    logger.info(f"Linked tg_chat_id={chat_id} to user_id={user_id}")
+
+
+MIN_QUEUE = 3  # минимум постов в очереди
+
+async def _ensure_queue(published_post_id: int):
+    """После публикации проверяет очередь и догенерирует если меньше MIN_QUEUE."""
+    with session() as s:
+        post = s.get(Post, published_post_id)
+        if not post:
+            return
+        channel_id = post.channel_id
+        channel = s.get(Channel, channel_id)
+        if not channel or not channel.enabled:
+            return
+        from sqlmodel import select as sel
+        pending_count = len(s.exec(
+            sel(Post).where(
+                Post.channel_id == channel_id,
+                Post.status.in_(["pending", "scheduled"])
+            )
+        ).all())
+
+    if pending_count < MIN_QUEUE:
+        for _ in range(MIN_QUEUE - pending_count):
+            try:
+                await generate_for_channel(channel_id)
+            except Exception as e:
+                logger.warning(f"auto-refill gen: {e}")
+                break
+
+
 async def tick():
     now = datetime.utcnow()
+
+    # Polling Telegram bot updates для привязки chat_id
+    try:
+        await _process_bot_updates()
+    except Exception as e:
+        logger.warning(f"bot polling: {e}")
+
     with session() as s:
         channels = s.exec(select(Channel).where(Channel.enabled == True)).all()  # noqa
         due_ids = [c.id for c in channels if c.verified and _is_due(c, now)]
