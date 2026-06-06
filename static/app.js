@@ -1045,18 +1045,16 @@ async function renderBilling(){
 }
 
 async function buy(pid){
-  // Safari блокирует window.open после await — открываем окно заранее
-  const win = window.open("", "_blank");
   try{
     const r = await api("POST", "/billing/buy", {package_id: pid});
-    if(win && r.payment_url){
-      win.location.href = r.payment_url;
+    if(!r.payment_url){ toast("Не удалось получить ссылку на оплату","err"); return; }
+    // Telegram Mini App — используем встроенный метод
+    if(window.Telegram?.WebApp?.openLink){
+      window.Telegram.WebApp.openLink(r.payment_url);
     } else {
-      if(win) win.close();
-      toast("Не удалось получить ссылку на оплату", "err");
+      window.location.href = r.payment_url;
     }
   } catch(e){
-    if(win) win.close();
     toast(e&&e.message?e.message:"Ошибка запроса","err");
   }
 }
