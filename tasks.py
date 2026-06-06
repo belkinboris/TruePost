@@ -312,6 +312,28 @@ async def tick():
         except Exception as e:
             logger.error(f"tick: канал {cid}: {e}")
 
+    # Держим минимум 3 поста в очереди для всех активных верифицированных каналов
+    with session() as s:
+        all_channels = s.exec(select(Channel).where(
+            Channel.enabled == True, Channel.verified == True  # noqa
+        )).all()
+        channel_ids = [c.id for c in all_channels]
+
+    for cid in channel_ids:
+        try:
+            with session() as s:
+                from sqlmodel import select as sel
+                pending_count = s.exec(sel(Post).where(
+                    Post.channel_id == cid,
+                    Post.status.in_(["pending", "scheduled"])
+                )).all()
+                count = len(pending_count)
+            if count < MIN_QUEUE:
+                for _ in range(MIN_QUEUE - count):
+                    await generate_for_channel(cid)
+        except Exception as e:
+            logger.warning(f"queue-refill канал {cid}: {e}")
+
     with session() as s:
         from database import due_scheduled_posts
         due_posts = [p.id for p in due_scheduled_posts(s, now)]
