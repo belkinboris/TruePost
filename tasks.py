@@ -109,6 +109,16 @@ async def generate_for_channel(channel_id: int, topic: str = "") -> dict:
         if user.notify_low_tokens and prev_balance > LOW_TOKENS_THRESHOLD and user.token_balance <= LOW_TOKENS_THRESHOLD:
             await _notify_user(user, f"⚠️ <b>Токены заканчиваются</b>\n\nОсталось ~1 пост. Пополните баланс в приложении.")
 
+    # Если пост сразу опубликован (автопилот) — догенерируем очередь
+    if pid:
+        with session() as s:
+            p = s.get(Post, pid)
+            if p and p.status == "published":
+                try:
+                    await _ensure_queue(pid)
+                except Exception as e:
+                    logger.warning(f"auto-refill after publish: {e}")
+
     return {"ok": True, "message": "Черновик создан", "post_id": pid, "tokens_used": tokens}
 
 
