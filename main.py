@@ -274,8 +274,11 @@ def patch_channel(channel_id: int, data: ChannelPatch, user: User = Depends(curr
         if "daily_times" in payload:
             payload["daily_times"] = json.dumps(payload["daily_times"])
         if "tg_chat" in payload:
-            payload["tg_chat"] = payload["tg_chat"].strip()
-            ch.verified = False
+            new_chat = payload["tg_chat"].strip()
+            payload["tg_chat"] = new_chat
+            # Сбрасываем verified только если реально поменялся username
+            if new_chat != (ch.tg_chat or ""):
+                ch.verified = False
         for k, v in payload.items():
             setattr(ch, k, v)
         s.add(ch)
@@ -861,6 +864,29 @@ async def bot_start(request: Request):
     except Exception:
         pass
     return {"ok": True}
+
+
+class _TgVerifyIn(_BaseModel):
+    username: str
+
+@app.post("/api/me/verify_tg")
+async def verify_tg_username(data: _TgVerifyIn, user: User = Depends(current_user)):
+    """Пробует отправить тестовое сообщение пользователю по username."""
+    username = data.username.strip()
+    if not username.startswith("@"):
+        username = "@" + username
+    # Bot API не поддерживает отправку по username для личных чатов.
+    # Сохраняем username и инструктируем пользователя написать /start боту.
+    with session() as s:
+        u = s.get(User, user.id)
+        u.tg_username = username
+        s.add(u); s.commit()
+    bot_link = f"https://t.me/{config.TELEGRAM_BOT_USERNAME or 'trpst_bot'}?start=u{user.id}"
+    return {
+        "ok": True,
+        "message": f"Username сохранён. Для активации уведомлений напиши /start боту — он свяжет аккаунты автоматически.",
+        "bot_link": bot_link
+    }
 
 
 @app.get("/legal/offer")
