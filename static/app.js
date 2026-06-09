@@ -404,9 +404,19 @@ async function ncGenerate(){
   $("nc_results").classList.remove("hidden");
   $("nc_results").innerHTML=`
     <h2 style="font-family:'Instrument Serif',serif;font-size:22px;font-weight:400;margin-bottom:4px">Варианты постов</h2>
-    <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px">Посты появляются по мере готовности. Выбери понравившийся.</p>
+    <p style="color:var(--text-dim);font-size:13px;margin-bottom:16px">Генерирую три варианта — выбери понравившийся.</p>
     <div id="ob_posts"></div>
-    <div id="ob_load" style="color:var(--text-faint);font-size:13px;padding:12px 0"><span class="spinner"></span> Генерирую…</div>`;
+    <div id="ob_load">
+      ${[0,1,2].map(i=>`<div style="background:var(--surface);border:1.5px solid var(--border-soft);border-radius:var(--radius);padding:20px;margin-bottom:14px;opacity:${1-i*0.2}">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+          <div style="width:60px;height:16px;background:var(--surface2);border-radius:6px"></div>
+          <div style="width:80px;height:30px;background:var(--surface2);border-radius:8px"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;color:var(--text-faint);font-size:13px">
+          <span class="spinner"></span> ${i===0?'Генерирую…':i===1?'Следующий вариант…':'Третий вариант…'}
+        </div>
+      </div>`).join("")}
+    </div>`;
 
   btn.textContent="✓ Варианты готовы ниже ↓";btn.style.background="var(--green)";
   btn.onclick=()=>$("nc_results").scrollIntoView({behavior:"smooth"});
@@ -421,11 +431,19 @@ async function ncGenerate(){
     try{
       const r=await api("POST",`/channels/${chan.id}/generate_format`,{post_format:f.key});
       App._onboardPosts.push({...f,text:r.text,post_id:r.post_id});
+      // Убираем один скелетон по мере появления поста
+      const loadEl=$("ob_load");
+      if(loadEl){
+        const firstSkeleton=loadEl.querySelector("div");
+        if(firstSkeleton) firstSkeleton.remove();
+      }
       const el=document.createElement("div");
       el.className="onboard-card";
       el.innerHTML=`<div class="onboard-header">
-        <div><span class="chip chip-blue">${esc(f.label)}</span>
-          <span style="font-size:12px;color:var(--text-faint);margin-left:8px">${esc(f.desc)}</span></div>
+        <div>
+          <span style="font-size:13px;font-weight:600;color:var(--accent)">${esc(f.label)}</span>
+          <span style="font-size:12px;color:var(--text-faint);margin-left:8px">${esc(f.desc)}</span>
+        </div>
         <button class="btn btn-sm" onclick="ncSelect(${i})">Выбрать →</button></div>
         <div style="margin-top:10px;font-size:14px;line-height:1.7;color:var(--text)">${renderTg(r.text)}</div>`;
       $("ob_posts").appendChild(el);
@@ -462,6 +480,7 @@ async function renderChannel(){
   let c;
   try{c=await api("GET","/channels/"+App.channelId);}
   catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");return go("dashboard");}
+  if(!$("app")) return; // DOM ещё не готов — прерываем
   try{c.daily_times=JSON.parse(c.daily_times||"[]");}catch(_){c.daily_times=[];}
   App._chan=c;
   const notConnected=!c.tg_chat?`<div style="background:var(--accent-soft);border:1px solid #e8d5bb;border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--accent-dark)">
