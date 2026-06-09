@@ -180,6 +180,7 @@ async function renderDashboard(){
 }
 
 // ONBOARDING
+let _ncType="thematic";
 let _ncVoice="author",_ncFormat="story",_ncEmoji="minimal",_ncCta=false,_ncCtaText="",_ncHz=12,_ncStyleProfile="";
 
 function renderNewChannel(){
@@ -261,8 +262,29 @@ function renderNewChannel(){
         <div id="nc_sp" class="hidden" style="margin-top:8px;padding:10px;background:var(--surface2);border-radius:10px;font-size:13px;color:var(--text-dim);white-space:pre-wrap"></div>
       </div>
 
+      <div style="margin-bottom:20px">
+        <div class="field-label" style="margin-bottom:8px">Тип канала</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px" id="nc_type_sel">
+          <div class="type-card on" id="nc_type_thematic" onclick="ncPickType('thematic')"
+            style="border:2px solid var(--accent);border-radius:12px;padding:14px;cursor:pointer;background:var(--accent-soft)">
+            <div style="font-size:18px;margin-bottom:6px">✍️</div>
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px">Тематический</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.4">Пишет по расписанию — психология, крипта-аналитика, лайфстайл</div>
+          </div>
+          <div class="type-card" id="nc_type_news" onclick="ncPickType('news')"
+            style="border:2px solid var(--border-soft);border-radius:12px;padding:14px;cursor:pointer">
+            <div style="font-size:18px;margin-bottom:6px">📡</div>
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px">Новостной</div>
+            <div style="font-size:12px;color:var(--text-dim);line-height:1.4">Публикует только когда вышла новость — M&A, политика, крипто-новости</div>
+          </div>
+        </div>
+        <div id="nc_type_hint" style="font-size:12px;color:var(--text-faint);margin-top:8px">
+          Тематический: публикует по расписанию всегда. Токены за каждый пост.
+        </div>
+      </div>
+
       <div>
-        <div class="field-label" style="margin-bottom:8px">Частота публикаций</div>
+        <div class="field-label" style="margin-bottom:8px" id="nc_freq_label">Частота публикаций</div>
         <div class="seg" id="nc_hzs" style="flex-wrap:wrap">
           <button onclick="ncHz(0.25,this)">15 мин</button>
           <button onclick="ncHz(0.5,this)">30 мин</button>
@@ -284,6 +306,22 @@ function renderNewChannel(){
       onclick="ncGenerate()" id="nc_genbtn">✦ Сгенерировать три варианта поста</button>
     <div id="nc_results" class="hidden" style="margin-top:24px"></div>
   </div>`;
+}
+
+function ncPickType(type){
+  _ncType=type;
+  const thematic=$("nc_type_thematic"),news=$("nc_type_news"),hint=$("nc_type_hint"),label=$("nc_freq_label");
+  if(type==="thematic"){
+    if(thematic){thematic.style.border="2px solid var(--accent)";thematic.style.background="var(--accent-soft)";}
+    if(news){news.style.border="2px solid var(--border-soft)";news.style.background="";}
+    if(hint) hint.textContent="Тематический: публикует по расписанию всегда. Токены за каждый пост.";
+    if(label) label.textContent="Частота публикаций";
+  } else {
+    if(news){news.style.border="2px solid var(--accent)";news.style.background="var(--accent-soft)";}
+    if(thematic){thematic.style.border="2px solid var(--border-soft)";thematic.style.background="";}
+    if(hint) hint.textContent="Новостной: проверяет новости по расписанию. Токены только при публикации.";
+    if(label) label.textContent="Проверять новости каждые";
+  }
 }
 
 function ncP(type,val,seg,btn){
@@ -335,6 +373,7 @@ async function ncGenerate(){
   try{
     chan=await api("POST","/channels",{
       title,about,style,
+      channel_type:_ncType,
       tg_chat:($("nc_chat")||{value:""}).value.trim(),
       interval_hours:_ncHz,
       use_web_search:($("nc_web")||{checked:true}).checked,
@@ -736,7 +775,27 @@ async function renderAdvanced(){
     </div>
 
     <div class="card">
-      <div class="card-title">Расписание</div>
+      <div class="card-title">Тип канала</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">
+        <div onclick="pickChannelType('thematic')" id="adv_type_thematic"
+          style="border:2px solid ${(c.channel_type||'thematic')==='thematic'?'var(--accent)':'var(--border-soft)'};
+          background:${(c.channel_type||'thematic')==='thematic'?'var(--accent-soft)':''};
+          border-radius:12px;padding:12px;cursor:pointer">
+          <div style="font-weight:600;font-size:13px;margin-bottom:2px">✍️ Тематический</div>
+          <div style="font-size:11px;color:var(--text-dim)">Публикует по расписанию</div>
+        </div>
+        <div onclick="pickChannelType('news')" id="adv_type_news"
+          style="border:2px solid ${(c.channel_type||'thematic')==='news'?'var(--accent)':'var(--border-soft)'};
+          background:${(c.channel_type||'thematic')==='news'?'var(--accent-soft)':''};
+          border-radius:12px;padding:12px;cursor:pointer">
+          <div style="font-weight:600;font-size:13px;margin-bottom:2px">📡 Новостной</div>
+          <div style="font-size:11px;color:var(--text-dim)">Только при наличии новостей</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-title" id="adv_sched_title">${(c.channel_type||'thematic')==='news'?'Проверять новости каждые':'Расписание'}</div>
       <div style="margin-bottom:12px">
         <div class="field-label" style="margin-bottom:8px">Интервал</div>
         <div class="seg" id="seg_int" style="flex-wrap:wrap">
@@ -912,6 +971,7 @@ async function saveChannel(){
 async function saveAdvanced(){
   const ih=_advInterval!=null?_advInterval:(App._chan.interval_hours||12);
   const payload={
+    channel_type:App._chan.channel_type||"thematic",
     post_voice:App._chan.post_voice||"author",
     post_format:App._chan.post_format||"story",
     emoji_style:App._chan.emoji_style||"minimal",
@@ -1135,11 +1195,28 @@ async function regenPost(id){
   }catch(e){toast(e&&e.message?e.message:"Ошибка","err");if(btn){btn.innerHTML="↻ Заново";btn.disabled=false;}}
 }
 
-function openTgConnect(){
+async function openTgConnect(){
+  // Если user не загружен — загружаем
+  if(!App.user?.id) await refreshUser();
   const uid=App.user?.id;
-  if(!uid){toast("Войдите в аккаунт","err");return;}
+  if(!uid){toast("Не удалось определить аккаунт","err");return;}
   const bot=App.cfg?.bot_username||"trpst_bot";
-  window.open("https://t.me/"+bot+"?start=u"+uid,"_blank");
+  const url="https://t.me/"+bot+"?start=u"+uid;
+  if(window.Telegram?.WebApp?.openLink){
+    window.Telegram.WebApp.openLink(url);
+  } else {
+    window.open(url,"_blank");
+  }
+}
+
+function pickChannelType(type){
+  App._chan.channel_type=type;
+  const ta=$("adv_type_thematic"),tn=$("adv_type_news"),tl=$("adv_sched_title");
+  if(ta) ta.style.border=type==="thematic"?"2px solid var(--accent)":"2px solid var(--border-soft)";
+  if(ta) ta.style.background=type==="thematic"?"var(--accent-soft)":"";
+  if(tn) tn.style.border=type==="news"?"2px solid var(--accent)":"2px solid var(--border-soft)";
+  if(tn) tn.style.background=type==="news"?"var(--accent-soft)":"";
+  if(tl) tl.textContent=type==="news"?"Проверять новости каждые":"Расписание";
 }
 
 function initCookieBanner(){
@@ -1178,9 +1255,14 @@ window.toggleHistory=toggleHistory;window.toggleExpand=toggleExpand;window.showP
 window.toggleEdit=toggleEdit;window.savePost=savePost;window.publishPost=publishPost;
 window.rejectPost=rejectPost;window.deletePost=deletePost;window.regenPost=regenPost;
 window.testPost=testPost;window.buy=buy;window.deleteAccount=deleteAccount;
-window.openTgConnect=openTgConnect;window.toggleChannelEnabled=toggleChannelEnabled;window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
+window.ncPickType=ncPickType;window.pickChannelType=pickChannelType;window.openTgConnect=openTgConnect;window.toggleChannelEnabled=toggleChannelEnabled;window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
 window.ncSelect=ncSelect;window.ncP=ncP;window.ncHz=ncHz;
 window.sendConsult=sendConsult;window.addSuggestedRule=addSuggestedRule;
 window.addRule=addRule;window.deleteRule=deleteRule;
 
-boot();
+// Ждём загрузки DOM перед запуском
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", boot);
+} else {
+  boot();
+}
