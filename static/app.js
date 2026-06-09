@@ -499,13 +499,10 @@ async function renderChannel(){
           </div>
           ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:8px;max-width:500px">${esc(c.about)}</p>`:""}
         </div>
-        <div style="text-align:center">
-          <div id="timer_block"></div>
-          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;justify-content:center">
-            <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
-            <button class="${c.enabled?'btn-outline btn-sm':'btn btn-sm'}" onclick="toggleChannelEnabled()"
-              id="pause_btn">${c.enabled?'⏸ Пауза':'▶ Возобновить'}</button>
-          </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-self:flex-start">
+          <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
+          <button class="${c.enabled?'btn-outline btn-sm':'btn btn-sm'}" onclick="toggleChannelEnabled()"
+            id="pause_btn">${c.enabled?'⏸ Пауза':'▶ Возобновить'}</button>
         </div>
       </div>
     </div>
@@ -524,31 +521,10 @@ async function renderChannel(){
     </div>
     <div id="tabbody"></div>
   </div>`;
-  renderTimer();renderTab();
+  renderTab();
 }
 
-function renderTimer(){
-  const block=$("timer_block");if(!block||!App._chan) return;
-  const c=App._chan;
-  if(!c.enabled){
-    block.innerHTML=`<div style="font-size:12px;color:var(--text-faint);font-style:italic">⏸ Канал на паузе</div>`;
-    return;
-  }
-  if(!c.last_generated_at){block.innerHTML=`<div style="font-size:12px;color:var(--text-faint)">Авто-генерация включена</div>`;return;}
-  const last=new Date(c.last_generated_at+"Z");
-  const nextMs=last.getTime()+(c.interval_hours||12)*3600000;
-  const diff=nextMs-Date.now();
-  if(diff<=0){block.innerHTML=`<div style="font-size:12px;color:var(--green)">⏱ Генерация скоро</div>`;return;}
-  const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000),s=Math.floor((diff%60000)/1000);
-  const ts=new Date(nextMs).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});
-  block.innerHTML=`<div style="text-align:center">
-    <div style="font-size:11px;color:var(--text-faint);margin-bottom:2px">следующий пост через</div>
-    <div style="font-family:'JetBrains Mono',monospace;font-size:20px;font-weight:500;color:var(--accent);letter-spacing:.05em">
-      ${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}</div>
-    <div style="font-size:11px;color:var(--text-faint)">в ${ts}</div>
-  </div>`;
-  setTimeout(renderTimer,1000);
-}
+function renderTimer(){} // убран — время публикации теперь на карточках постов
 
 function openGenPanel(){const p=$("genPanel");if(!p) return;p.classList.toggle("hidden");if(!p.classList.contains("hidden")) $("genTopic").focus();}
 
@@ -582,7 +558,7 @@ function toggleExpand(id){
   btn.textContent=short?"Свернуть ↑":"Читать полностью ↓";
 }
 
-function renderPostCard(p){
+function renderPostCard(p, pubMs, channelEnabled){
   const when=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
   const editable=p.status==="pending"||p.status==="onboarding";
   const sched=p.status==="scheduled";
@@ -593,12 +569,19 @@ function renderPostCard(p){
     rejected:`<span class="chip chip-gray">удалён</span>`,
     onboarding:`<span class="chip chip-blue">онбординг</span>`,
   };
+  // Время публикации — показываем если канал активен и есть auto_publish или scheduled
   let schedInfo="";
-  if(sched&&p.scheduled_at){
-    const sd=new Date(p.scheduled_at+"Z");const diff=sd-Date.now();
-    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
-    const ts=sd.toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-    schedInfo=`<div style="font-size:12px;color:var(--blue);margin-top:6px">⏰ ${diff>0?(h>0?h+"ч ":"")+m+"м":"скоро"} — в ${ts}</div>`;
+  if(pubMs && (editable||sched)){
+    const diff=pubMs-Date.now();
+    const ts=new Date(pubMs).toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+    const isPaused=channelEnabled===false;
+    if(isPaused){
+      schedInfo=`<div style="font-size:12px;color:var(--text-faint);margin-top:6px">⏸ Канал на паузе</div>`;
+    } else if(App._chan?.auto_publish){
+      const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
+      const label=diff>0?(h>0?`через ${h}ч ${m}м`:`через ${m}м`):"скоро";
+      schedInfo=`<div style="font-size:12px;color:var(--accent);margin-top:6px;font-weight:500">⏰ Публикуется ${label} · в ${ts}</div>`;
+    }
   }
   let actions="";
   if(editable) actions=`
@@ -646,14 +629,28 @@ async function renderQueue(){
   const pending=posts.filter(p=>p.status==="pending"||p.status==="onboarding"||p.status==="scheduled");
   const history=posts.filter(p=>p.status==="published"||p.status==="rejected");
 
+  // Вычисляем время публикации для каждого поста в очереди
+  const c=App._chan;
+  const intervalMs=(c.interval_hours||12)*3600000;
+  // Берём последнюю публикацию из истории
+  const lastPub=history.find(p=>p.status==="published");
+  const lastPubMs=lastPub?new Date(lastPub.published_at+"Z").getTime():Date.now()-intervalMs;
+
   let html="";
   if(!pending.length){
-    const paused = App._chan && !App._chan.enabled;
+    const paused = c && !c.enabled;
     html+=paused
       ? `<div class="empty"><div class="empty-icon">⏸</div><h3>Канал на паузе</h3><p>При возобновлении автоматически сгенерируются 3 поста.</p></div>`
       : `<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
   } else {
-    html+=pending.map(p=>renderPostCard(p)).join("");
+    html+=pending.map((p,i)=>{
+      // Если пост уже запланирован — используем его scheduled_at
+      // Иначе вычисляем: последняя публикация + (i+1) * интервал
+      const pubMs=p.scheduled_at
+        ? new Date(p.scheduled_at+"Z").getTime()
+        : lastPubMs + (i+1)*intervalMs;
+      return renderPostCard(p, pubMs, c.enabled);
+    }).join("");
   }
   if(history.length){
     html+=`<div style="margin-top:20px">
@@ -1228,10 +1225,9 @@ async function toggleChannelEnabled(){
   try{
     await api("PATCH","/channels/"+c.id,{enabled:newVal});
     App._chan.enabled=newVal;
-    if(newVal) App._chan.last_generated_at=null; // сброс таймера при возобновлении
+    if(newVal) App._chan.last_generated_at=null; // сброс при возобновлении
     const btn=$("pause_btn");
     if(btn){btn.textContent=newVal?"⏸ Пауза":"▶ Возобновить";btn.className=newVal?"btn-outline btn-sm":"btn btn-sm";}
-    renderTimer();
     if(App.tab==="queue") renderQueue();
     toast(newVal?"Канал запущен — генерируем посты…":"Публикация приостановлена","ok");
   }catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
