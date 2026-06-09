@@ -1225,7 +1225,7 @@ async function toggleChannelEnabled(){
   try{
     await api("PATCH","/channels/"+c.id,{enabled:newVal});
     App._chan.enabled=newVal;
-    if(newVal) App._chan.last_generated_at=null; // сброс при возобновлении
+    if(newVal) App._chan.last_generated_at=new Date().toISOString(); // таймер с нуля
     const btn=$("pause_btn");
     if(btn){btn.textContent=newVal?"⏸ Пауза":"▶ Возобновить";btn.className=newVal?"btn-outline btn-sm":"btn btn-sm";}
     if(App.tab==="queue") renderQueue();
