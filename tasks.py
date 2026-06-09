@@ -182,7 +182,7 @@ async def publish_post(post_id: int) -> dict:
             return {"ok": False, "message": "Пост не найден"}
         channel = s.get(Channel, post.channel_id)
         user = s.get(User, post.user_id)
-        text = post.text
+        text = generator._clean_post(post.text)  # дочищаем перед публикацией
         chat = channel.tg_chat
 
     result = await telegram_api.send_message(chat, text)

@@ -297,12 +297,15 @@ def patch_channel(channel_id: int, data: ChannelPatch, user: User = Depends(curr
 
 @app.delete("/api/channels/{channel_id}")
 def delete_channel(channel_id: int, user: User = Depends(current_user)):
+    from database import ChannelRule
     with session() as s:
         ch = _own_channel(s, channel_id, user)
         for src in s.exec(select(Source).where(Source.channel_id == channel_id)).all():
             s.delete(src)
         for p in s.exec(select(Post).where(Post.channel_id == channel_id)).all():
             s.delete(p)
+        for r in s.exec(select(ChannelRule).where(ChannelRule.channel_id == channel_id)).all():
+            s.delete(r)
         s.delete(ch)
         s.commit()
     return {"ok": True}
