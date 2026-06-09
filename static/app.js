@@ -192,22 +192,27 @@ function renderNewChannel(){
       <label class="field"><span class="field-label">Название (для тебя)</span>
         <input id="nc_title" placeholder="Например: Крипта без воды" maxlength="80"></label>
 
-      <label class="field mt"><span class="field-label">@username канала или ссылка t.me/</span>
+      <div class="field mt"><span class="field-label">Telegram-канал</span>
         <div id="nc_verify_block">
           <div class="row" style="gap:8px">
             <input id="nc_chat" placeholder="@my_channel или https://t.me/channel" style="flex:1">
             <button class="btn-outline btn-sm" onclick="ncVerify()" id="nc_vbtn" style="white-space:nowrap">Проверить</button>
           </div>
-          <div class="hint">1. Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором.<br>2. Вставь @username. 3. Нажми «Проверить».</div>
+          <div class="hint">Сначала добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> в админы канала, потом вставь @username и нажми «Проверить».</div>
           <div id="nc_vmsg" style="font-size:13px;margin-top:6px"></div>
           <button class="btn-ghost btn-sm" onclick="ncSkipVerify()"
-            style="margin-top:6px;font-size:12px;color:var(--text-faint)">Подключить позже →</button>
+            style="margin-top:8px;font-size:13px;color:var(--accent)">Подключу позже →</button>
         </div>
-        <div id="nc_verify_skipped" class="hidden" style="font-size:13px;color:var(--text-faint);padding:8px 0">
-          ✓ Пропущено — подключите канал позже в настройках.
-          <button class="btn-ghost btn-sm" onclick="ncShowVerify()" style="font-size:12px;margin-left:4px">Подключить сейчас</button>
+        <div id="nc_verify_skipped" class="hidden">
+          <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface2);border-radius:12px">
+            <span style="font-size:18px">🕓</span>
+            <div style="flex:1;font-size:13px;color:var(--text-dim);line-height:1.5">
+              Канал подключишь позже в настройках. Сейчас ИИ покажет варианты постов.
+            </div>
+            <button class="btn-ghost btn-sm" onclick="ncShowVerify()" style="font-size:12px;color:var(--accent);white-space:nowrap">Подключить</button>
+          </div>
         </div>
-      </label>
+      </div>
 
       <label class="field mt"><span class="field-label">О чём канал</span>
         <textarea id="nc_about" rows="3" placeholder="Опиши идею — о чём, для кого, что интересно аудитории"></textarea></label>
@@ -447,9 +452,37 @@ async function ncGenerate(){
         <button class="btn btn-sm" onclick="ncSelect(${i})">Выбрать →</button></div>
         <div style="margin-top:10px;font-size:14px;line-height:1.7;color:var(--text)">${renderTg(r.text)}</div>`;
       $("ob_posts").appendChild(el);
-    }catch(e){App._onboardPosts.push({...f,text:null,error:e.message});}
+    }catch(e){
+      App._onboardPosts.push({...f,text:null,error:e.message});
+      // Убираем скелетон и показываем ошибку по этому варианту
+      const loadEl=$("ob_load");
+      if(loadEl){const fs=loadEl.querySelector("div");if(fs) fs.remove();}
+      const errMsg=(e.message||"").toLowerCase();
+      const human=errMsg.includes("токен")||errMsg.includes("limit")||errMsg.includes("закончил")
+        ? "Закончились токены. Пополни баланс в разделе «Тарифы»."
+        : errMsg.includes("529")||errMsg.includes("overload")
+        ? "Серверы ИИ перегружены. Попробуй через минуту."
+        : (e.message||"Не удалось сгенерировать");
+      const el=document.createElement("div");
+      el.className="onboard-card";
+      el.style.borderColor="var(--red)";
+      el.innerHTML=`<div style="font-size:13px;color:var(--red)">⚠️ ${esc(human)}</div>`;
+      $("ob_posts").appendChild(el);
+    }
   }
-  $("ob_load").innerHTML="";
+  const loadEnd=$("ob_load");if(loadEnd) loadEnd.innerHTML="";
+  // Если ни один пост не сгенерировался — особое сообщение
+  const okPosts=App._onboardPosts.filter(p=>p.post_id);
+  if(!okPosts.length){
+    $("ob_posts").insertAdjacentHTML("beforeend",`
+      <div style="padding:16px;background:var(--accent-soft);border-radius:var(--radius);text-align:center">
+        <div style="font-size:14px;color:var(--accent-dark);margin-bottom:10px">Не удалось создать посты. Проверь баланс токенов.</div>
+        <button class="btn" onclick="go('billing')">Перейти к тарифам →</button>
+      </div>`);
+    btn.disabled=false;btn.textContent="✦ Попробовать снова";
+    btn.style.background="";btn.onclick=()=>ncGenerate();
+    return;
+  }
   $("ob_posts").insertAdjacentHTML("beforeend",`
     <div style="margin-top:20px;padding:16px;background:var(--accent-soft);border-radius:var(--radius);border:1px solid #e8d5bb">
       <div style="font-size:14px;font-weight:600;color:var(--accent-dark);margin-bottom:6px">Не понравился ни один?</div>
@@ -1333,7 +1366,20 @@ function initKeyboardDismiss(){
 }
 
 // BOOT
+function initTelegram(){
+  const tg=window.Telegram?.WebApp;
+  if(!tg) return;
+  try{
+    tg.ready();
+    tg.expand();                       // на весь экран
+    if(tg.setHeaderColor) tg.setHeaderColor("#f5f1ea");
+    if(tg.setBackgroundColor) tg.setBackgroundColor("#f5f1ea");
+    if(tg.disableVerticalSwipes) tg.disableVerticalSwipes(); // не закрывать свайпом случайно
+  }catch(_){}
+}
+
 async function boot(){
+  initTelegram();
   try{App.cfg=await api("GET","/config");}catch(_){App.cfg={packages:[]};}
   initCookieBanner();initKeyboardDismiss();
   if(!App.token) return renderAuth();

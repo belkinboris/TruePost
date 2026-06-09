@@ -388,6 +388,8 @@ body { overflow-x: hidden; position: relative; }
 
 /* ── Back link ───────────────────────────────── */
 .back-link {
+  -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent;
   color: var(--accent) !important;
   font-weight: 600 !important;
   font-size: 13px;
@@ -397,3 +399,11 @@ body { overflow-x: hidden; position: relative; }
   padding: 0;
 }
 .back-link:hover { opacity: 0.75; }
+
+/* ── Отключаем подсветку тапа везде (Telegram/iOS) ── */
+button, a, .chip, .tab, .seg button, .back-link, .brand, .token-pill {
+  -webkit-tap-highlight-color: transparent;
+}
+.brand, .back-link, .tab, .btn, .btn-sm, .btn-outline, .btn-ghost, .btn-danger, .btn-green {
+  -webkit-user-select: none; user-select: none;
+}
