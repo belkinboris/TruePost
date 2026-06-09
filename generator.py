@@ -109,6 +109,12 @@ def _clean_post(text: str) -> str:
     return text.strip()
 
 
+import asyncio
+
+class GenerationError(Exception):
+    """Понятная ошибка генерации для показа пользователю."""
+    pass
+
 async def _call_claude(system, user, use_web_search, max_tokens=700):
     body = {
         "model": config.ANTHROPIC_MODEL,
@@ -118,13 +124,41 @@ async def _call_claude(system, user, use_web_search, max_tokens=700):
     }
     if use_web_search:
         body["tools"] = [{"type": "web_search_20250305", "name": "web_search", "max_uses": 2}]
-    async with httpx.AsyncClient(timeout=120) as client:
-        r = await client.post(ANTHROPIC_URL, headers=_headers(), json=body)
-        if r.status_code >= 400:
-            logger.error(f"Claude API {r.status_code}: {r.text[:500]}")
-            r.raise_for_status()
-        data = r.json()
-    return _extract_text(data), _usage_tokens(data)
+
+    last_error = None
+    for attempt in range(3):  # до 3 попыток на перегрузку
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                r = await client.post(ANTHROPIC_URL, headers=_headers(), json=body)
+        except httpx.TimeoutException:
+            last_error = "timeout"
+            await asyncio.sleep(2 * (attempt + 1))
+            continue
+
+        if r.status_code < 400:
+            data = r.json()
+            return _extract_text(data), _usage_tokens(data)
+
+        # Ошибки
+        logger.error(f"Claude API {r.status_code}: {r.text[:500]}")
+        if r.status_code in (429, 529):  # rate limit / overloaded
+            last_error = "overloaded"
+            await asyncio.sleep(3 * (attempt + 1))
+            continue
+        if r.status_code == 401:
+            raise GenerationError("Ошибка авторизации ИИ. Обратитесь в поддержку.")
+        if r.status_code == 400:
+            raise GenerationError("Не удалось сгенерировать пост. Попробуйте изменить тему.")
+        # Прочие ошибки — последняя попытка
+        last_error = f"http_{r.status_code}"
+        await asyncio.sleep(2)
+
+    # Все попытки исчерпаны
+    if last_error == "overloaded":
+        raise GenerationError("Серверы ИИ сейчас перегружены. Попробуйте через минуту.")
+    if last_error == "timeout":
+        raise GenerationError("Превышено время ожидания. Попробуйте ещё раз.")
+    raise GenerationError("Временная ошибка ИИ. Попробуйте ещё раз через минуту.")
 
 
 async def generate_post(channel: Channel, source_material: str = "", topic: str = "", custom_rules: str = "", recent_titles: str = "") -> tuple[str, int]:

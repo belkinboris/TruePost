@@ -114,9 +114,12 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
 
     try:
         text, tokens = await generator.generate_post(channel, material, topic, rules_text, recent_titles)
+    except generator.GenerationError as e:
+        # Понятная ошибка — показываем как есть
+        return {"ok": False, "message": str(e)}
     except Exception as e:
         logger.error(f"Ошибка генерации канала {channel_id}: {e}")
-        return {"ok": False, "message": f"Ошибка генерации: {e}"}
+        return {"ok": False, "message": "Временная ошибка. Попробуйте ещё раз через минуту."}
 
     if _looks_like_menu(text):
         return {"ok": False, "message": "ИИ не смог определить тему. Задайте тему поста вручную."}
