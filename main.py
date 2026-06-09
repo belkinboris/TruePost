@@ -203,11 +203,13 @@ def me(user: User = Depends(current_user)):
         refs = s.exec(select(Referral).where(Referral.referrer_id == user.id)).all()
         count = len(refs)
     return {
+        "id": user.id,
         "email": user.email,
         "token_balance": user.token_balance,
         "is_admin": user.is_admin,
         "ref_code": user.ref_code,
         "referrals_count": count,
+        "tg_chat_id": user.tg_chat_id,
     }
 
 
