@@ -210,6 +210,8 @@ def me(user: User = Depends(current_user)):
         "ref_code": user.ref_code,
         "referrals_count": count,
         "tg_chat_id": user.tg_chat_id,
+        "notify_published": user.notify_published,
+        "notify_low_tokens": user.notify_low_tokens,
     }
 
 

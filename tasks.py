@@ -148,15 +148,12 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
 
         # Читаем всё необходимое для уведомлений пока сессия открыта
         notify_chat_id = user.tg_chat_id
-        notify_new = user.notify_new_post and post.status == "pending"
         notify_pub = user.notify_published and post.status == "published"
         notify_low = user.notify_low_tokens and prev_balance > LOW_TOKENS_THRESHOLD and user.token_balance <= LOW_TOKENS_THRESHOLD
         chan_title = channel.title
 
     # Уведомления — вне сессии, с явным chat_id
     if notify_chat_id:
-        if notify_new:
-            await _notify_user_by_id(notify_chat_id, f"✦ <b>Новый пост готов</b>\n\nКанал: {chan_title}\n\n{text[:200]}{'...' if len(text) > 200 else ''}")
         if notify_pub:
             await _notify_user_by_id(notify_chat_id, f"✅ <b>Пост опубликован</b>\n\nКанал: {chan_title}")
         if notify_low:
