@@ -511,7 +511,10 @@ async function renderChannel(){
 function renderTimer(){
   const block=$("timer_block");if(!block||!App._chan) return;
   const c=App._chan;
-  if(!c.enabled){block.innerHTML="";return;}
+  if(!c.enabled){
+    block.innerHTML=`<div style="font-size:12px;color:var(--text-faint);font-style:italic">⏸ Канал на паузе</div>`;
+    return;
+  }
   if(!c.last_generated_at){block.innerHTML=`<div style="font-size:12px;color:var(--text-faint)">Авто-генерация включена</div>`;return;}
   const last=new Date(c.last_generated_at+"Z");
   const nextMs=last.getTime()+(c.interval_hours||12)*3600000;
@@ -626,7 +629,10 @@ async function renderQueue(){
 
   let html="";
   if(!pending.length){
-    html+=`<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
+    const paused = App._chan && !App._chan.enabled;
+    html+=paused
+      ? `<div class="empty"><div class="empty-icon">⏸</div><h3>Канал на паузе</h3><p>При возобновлении автоматически сгенерируются 3 поста.</p></div>`
+      : `<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
   } else {
     html+=pending.map(p=>renderPostCard(p)).join("");
   }
@@ -1206,10 +1212,12 @@ async function toggleChannelEnabled(){
   try{
     await api("PATCH","/channels/"+c.id,{enabled:newVal});
     App._chan.enabled=newVal;
+    if(newVal) App._chan.last_generated_at=null; // сброс таймера при возобновлении
     const btn=$("pause_btn");
     if(btn){btn.textContent=newVal?"⏸ Пауза":"▶ Возобновить";btn.className=newVal?"btn-outline btn-sm":"btn btn-sm";}
     renderTimer();
-    toast(newVal?"Канал запущен":"Публикация приостановлена","ok");
+    if(App.tab==="queue") renderQueue();
+    toast(newVal?"Канал запущен — генерируем посты…":"Публикация приостановлена","ok");
   }catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
 }
 
