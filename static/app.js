@@ -19,9 +19,26 @@ const $ = id => document.getElementById(id);
 const esc = s => (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":'&#39;'}[c]));
 const fmt = n => (n||0).toLocaleString("ru-RU");
 
+function cleanPostText(text){
+  if(!text) return "";
+  let t=text.trim();
+  // Режем thinking-блок до разделителя ---
+  const dashIdx=t.indexOf("\n---");
+  if(dashIdx>=0 && dashIdx<300){
+    t=t.slice(dashIdx+4).replace(/^-+/,"").trim();
+  }
+  // Убираем первый абзац если это рассуждение ИИ
+  const thinkRe=/^(Беру|Взял|Нашёл|Нашел|Выбрал|Использую|Из поиска|По результатам|Проверил|Вижу|Смотрю|Ищу|Изучил|Анализирую)\b/i;
+  const paras=t.split(/\n\s*\n/);
+  if(paras.length>1 && thinkRe.test(paras[0].trim())){
+    t=paras.slice(1).join("\n\n").trim();
+  }
+  return t;
+}
+
 function renderTg(text) {
   if (!text) return "";
-  return esc(text)
+  return esc(cleanPostText(text))
     .replace(/&lt;b&gt;(.*?)&lt;\/b&gt;/gs,"<b>$1</b>")
     .replace(/&lt;i&gt;(.*?)&lt;\/i&gt;/gs,"<i>$1</i>")
     .replace(/\n/g,"<br>");
@@ -140,13 +157,20 @@ function _intervalLabel(h){
   return `каждые ${h/24|0}д`;
 }
 function _nextTimeLabel(c){
-  if(!c.last_generated_at) return "скоро";
-  const last=new Date(c.last_generated_at+"Z");
-  const next=new Date(last.getTime()+(c.interval_hours||12)*3600000);
-  const diff=next-Date.now();
-  if(diff<=0) return "скоро";
+  if(c.enabled===false) return "на паузе";
+  // Время следующей публикации = последняя генерация + интервал, но не в прошлом
+  const intervalMs=(c.interval_hours||12)*3600000;
+  const now=Date.now();
+  let next;
+  if(c.last_generated_at){
+    next=new Date(c.last_generated_at+"Z").getTime()+intervalMs;
+    if(next<now) next=now+60000;
+  } else {
+    next=now+intervalMs;
+  }
+  const diff=next-now;
   const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
-  const ts=next.toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});
+  const ts=new Date(next).toLocaleTimeString("ru-RU",{hour:"2-digit",minute:"2-digit"});
   return h>0?`через ${h}ч ${m}м (в ${ts})`:`через ${m}м (в ${ts})`;
 }
 
@@ -522,7 +546,7 @@ async function renderChannel(){
   $("app").innerHTML=topbar("dashboard","все каналы")+`<div class="wrap">
     ${notConnected}
     <div class="chan-header card" style="margin-bottom:16px">
-      <div class="row between" style="flex-wrap:wrap;gap:12px">
+      <div style="display:flex;flex-direction:column;gap:12px">
         <div>
           <h2 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">${esc(c.title)}</h2>
           <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
@@ -532,7 +556,7 @@ async function renderChannel(){
           </div>
           ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:8px;max-width:500px">${esc(c.about)}</p>`:""}
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-self:flex-start">
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
           <button class="${c.enabled?'btn-outline btn-sm':'btn btn-sm'}" onclick="toggleChannelEnabled()"
             id="pause_btn">${c.enabled?'⏸ Пауза':'▶ Возобновить'}</button>
@@ -665,9 +689,14 @@ async function renderQueue(){
   // Вычисляем время публикации для каждого поста в очереди
   const c=App._chan;
   const intervalMs=(c.interval_hours||12)*3600000;
-  // Берём последнюю публикацию из истории
+  // Базовая точка отсчёта: следующая публикация не может быть в прошлом
   const lastPub=history.find(p=>p.status==="published");
-  const lastPubMs=lastPub?new Date(lastPub.published_at+"Z").getTime():Date.now()-intervalMs;
+  const lastPubMs=lastPub?new Date(lastPub.published_at+"Z").getTime():0;
+  // Первый пост публикуется через интервал от последней публикации,
+  // но если это время уже прошло — отсчитываем от текущего момента
+  const now=Date.now();
+  let firstPubMs=lastPubMs?lastPubMs+intervalMs:now+intervalMs;
+  if(firstPubMs<now) firstPubMs=now+60000; // если просрочено — через минуту
 
   let html="";
   if(!pending.length){
@@ -677,11 +706,11 @@ async function renderQueue(){
       : `<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
   } else {
     html+=pending.map((p,i)=>{
-      // Если пост уже запланирован — используем его scheduled_at
-      // Иначе вычисляем: последняя публикация + (i+1) * интервал
+      // Если пост запланирован вручную — берём его scheduled_at
+      // Иначе: первый публикуется в firstPubMs, каждый следующий +интервал
       const pubMs=p.scheduled_at
         ? new Date(p.scheduled_at+"Z").getTime()
-        : lastPubMs + (i+1)*intervalMs;
+        : firstPubMs + i*intervalMs;
       return renderPostCard(p, pubMs, c.enabled);
     }).join("");
   }
