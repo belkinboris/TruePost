@@ -40,6 +40,12 @@ async def _notify_user(user: User, text: str):
     if not ok:
         logger.warning(f"Уведомление пользователю {user.id}: {err}")
 
+async def _notify_user_by_id(chat_id: int, text: str):
+    """Отправляет уведомление напрямую по chat_id (без объекта User)."""
+    ok, err = await telegram_api.send_notification(chat_id, text)
+    if not ok:
+        logger.warning(f"Уведомление chat_id={chat_id}: {err}")
+
 
 async def generate_for_channel(channel_id: int, topic: str = "") -> dict:
     with session() as s:
@@ -176,6 +182,8 @@ async def publish_post(post_id: int) -> dict:
     if not result.get("ok"):
         return {"ok": False, "message": f"Telegram: {result.get('description')}"}
 
+    notify_chat_id = None
+    notify_title = ""
     with session() as s:
         post = s.get(Post, post_id)
         channel = s.get(Channel, post.channel_id)
@@ -185,8 +193,12 @@ async def publish_post(post_id: int) -> dict:
         post.tg_message_id = result["result"].get("message_id")
         s.add(post); s.commit()
 
-        if user and user.notify_published:
-            await _notify_user(user, f"✅ <b>Пост опубликован</b>\n\nКанал: {channel.title if channel else ''}")
+        if user and user.notify_published and user.tg_chat_id:
+            notify_chat_id = user.tg_chat_id
+            notify_title = channel.title if channel else ""
+
+    if notify_chat_id:
+        await _notify_user_by_id(notify_chat_id, f"✅ <b>Пост опубликован</b>\n\nКанал: {notify_title}")
 
     # Автодогенерация: держим минимум 3 поста в очереди
     try:
