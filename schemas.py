@@ -26,6 +26,7 @@ class ChannelIn(BaseModel):
     schedule_kind: str = "interval"
     interval_hours: float = 12
     daily_times: list[str] = ["10:00"]
+    channel_type: str = "thematic"
     enabled: bool = True
     onboarded: bool = False
 
@@ -48,6 +49,7 @@ class ChannelPatch(BaseModel):
     schedule_kind: Optional[str] = None
     interval_hours: Optional[float] = None
     daily_times: Optional[list[str]] = None
+    channel_type: Optional[str] = None
     enabled: Optional[bool] = None
     onboarded: Optional[bool] = None
 

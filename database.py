@@ -67,6 +67,7 @@ class Channel(SQLModel, table=True):
     publish_window_end: str = ""           # "22:00" — конец окна
     daily_times: str = '["10:00"]'
 
+    channel_type: str = "thematic"  # "thematic" или "news"
     enabled: bool = True
     onboarded: bool = False
     last_generated_at: Optional[datetime] = None

@@ -59,6 +59,30 @@ async def generate_for_channel(channel_id: int, topic: str = "") -> dict:
         rules = s.exec(select(ChannelRule).where(ChannelRule.channel_id == channel_id)).all()
         rules_text = "\n".join(f"• {r.rule_text}" for r in rules) if rules else ""
 
+    # Загружаем заголовки последних постов чтобы не повторять темы
+    recent_titles = ""
+    try:
+        with session() as s:
+            from sqlmodel import select as sel
+            recent_posts = s.exec(
+                sel(Post).where(
+                    Post.channel_id == channel_id,
+                    Post.status == "published"
+                ).order_by(Post.published_at.desc()).limit(30)
+            ).all()
+            titles = []
+            for p in recent_posts:
+                first_line = p.text.strip().split("\n")[0]
+                # Убираем HTML теги для читаемости
+                import re as _re
+                first_line = _re.sub(r"<[^>]+>", "", first_line).strip()
+                if first_line:
+                    titles.append(f"- {first_line[:120]}")
+            if titles:
+                recent_titles = "\n".join(titles)
+    except Exception as e:
+        logger.warning(f"Ошибка загрузки заголовков: {e}")
+
     material = ""
     if source_urls:
         try:
@@ -66,8 +90,24 @@ async def generate_for_channel(channel_id: int, topic: str = "") -> dict:
         except Exception as e:
             logger.warning(f"Ошибка сбора источников: {e}")
 
+    # Для новостных каналов — сначала проверяем есть ли свежие новости
+    if getattr(channel, "channel_type", "thematic") == "news" and not topic:
+        try:
+            has_news, check_tokens = await generator.check_news_available(channel)
+            if not has_news:
+                logger.info(f"Канал {channel_id}: новостей нет, пропускаем генерацию")
+                # Списываем минимум токенов за проверку
+                with session() as s:
+                    u = s.get(User, channel.user_id)
+                    if u:
+                        u.token_balance = max(0, u.token_balance - check_tokens)
+                        s.add(u); s.commit()
+                return {"ok": True, "message": "Новостей нет, публикация пропущена", "skipped": True}
+        except Exception as e:
+            logger.warning(f"Ошибка проверки новостей: {e}")
+
     try:
-        text, tokens = await generator.generate_post(channel, material, topic, rules_text)
+        text, tokens = await generator.generate_post(channel, material, topic, rules_text, recent_titles)
     except Exception as e:
         logger.error(f"Ошибка генерации канала {channel_id}: {e}")
         return {"ok": False, "message": f"Ошибка генерации: {e}"}

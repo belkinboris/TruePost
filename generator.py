@@ -84,7 +84,7 @@ async def _call_claude(system, user, use_web_search, max_tokens=700):
     return _extract_text(data), _usage_tokens(data)
 
 
-async def generate_post(channel: Channel, source_material: str = "", topic: str = "", custom_rules: str = "") -> tuple[str, int]:
+async def generate_post(channel: Channel, source_material: str = "", topic: str = "", custom_rules: str = "", recent_titles: str = "") -> tuple[str, int]:
     voice = VOICE_MAP.get(getattr(channel, "post_voice", "author"), VOICE_MAP["author"])
     fmt = FORMAT_MAP.get(getattr(channel, "post_format", "story"), FORMAT_MAP["story"])
     emoji = EMOJI_MAP.get(getattr(channel, "emoji_style", "minimal"), EMOJI_MAP["minimal"])
@@ -144,7 +144,12 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
 {rules_block}
 {mood_instruction}
 
-БАЗОВЫЕ ПРАВИЛА (нарушение недопустимо):
+{f'''УЖЕ ОПУБЛИКОВАНО — не повторять:
+{recent_titles}
+Правило: выбирай НОВОЕ событие которого нет в списке.
+Если все свежие события уже покрыты — возьми другой угол: последствия, реакция рынка, сравнение с похожим случаем. Никогда не пиши про то же событие теми же словами.
+
+''' if recent_titles else ""}БАЗОВЫЕ ПРАВИЛА (нарушение недопустимо):
 - Длинное тире — ЗАПРЕЩЕНО. Используй только короткое тире -
 - ЗАПРЕЩЕНО любое вступление перед постом: «Есть интересная сделка», «Возьму свежую новость», «---», «Пишу пост» и любые похожие фразы
 - ЗАПРЕЩЕНО отделять вступление от поста символами ---, ***, или пустыми строками
@@ -170,6 +175,30 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
 
     text, tokens = await _call_claude(system, user_msg, use_search, max_tokens=650)
     return _clean_post(text), tokens
+
+
+async def check_news_available(channel: "Channel") -> tuple:
+    """Проверяет есть ли свежие новости по теме. Возвращает (bool, tokens_used)."""
+    system = "You are a news editor. Reply only YES or NO."
+    user = (
+        f"Topic: {channel.about}\n\n"
+        f"Are there any NEW events or news on this topic in the last 24 hours worth covering? "
+        f"Answer with one word: YES or NO."
+    )
+    body = {
+        "model": config.ANTHROPIC_MODEL,
+        "max_tokens": 10,
+        "system": system,
+        "messages": [{"role": "user", "content": user}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 1}],
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(ANTHROPIC_URL, headers=_headers(), json=body)
+        data = r.json()
+    text = _extract_text(data).strip().upper()
+    tokens = _usage_tokens(data)
+    has_news = "YES" in text
+    return has_news, tokens
 
 
 async def consult(channel: "Channel", user_message: str, history: list, rules_text: str = "") -> tuple:
