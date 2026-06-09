@@ -108,7 +108,7 @@ function renderAuth(mode="login"){
 
 // TOPBAR
 function topbar(backView,backLabel){
-  const back=backView?`<div class="back-row"><button class="back-link" onclick="go('${backView}')" style="color:var(--text);font-weight:600;font-size:14px">← ${backLabel||"назад"}</button></div>`:"";
+  const back=backView?`<div class="back-row"><button class="back-link" onclick="go('${backView}')">← ${backLabel||"назад"}</button></div>`:"";
   const low=App.user&&App.user.token_balance<20000;
   const lowBanner=low?`<div style="background:#fef3c7;border-bottom:1px solid #f59e0b;padding:8px 20px;font-size:13px;text-align:center;color:#92400e">
     ⚠️ Токены заканчиваются — осталось ~1 пост.
@@ -480,9 +480,9 @@ async function renderChannel(){
           </div>
           ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:8px;max-width:500px">${esc(c.about)}</p>`:""}
         </div>
-        <div style="text-align:right">
+        <div style="text-align:center">
           <div id="timer_block"></div>
-          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+          <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;justify-content:center">
             <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
             <button class="${c.enabled?'btn-outline btn-sm':'btn btn-sm'}" onclick="toggleChannelEnabled()"
               id="pause_btn">${c.enabled?'⏸ Пауза':'▶ Возобновить'}</button>
@@ -511,6 +511,7 @@ async function renderChannel(){
 function renderTimer(){
   const block=$("timer_block");if(!block||!App._chan) return;
   const c=App._chan;
+  if(!c.enabled){block.innerHTML="";return;}
   if(!c.last_generated_at){block.innerHTML=`<div style="font-size:12px;color:var(--text-faint)">Авто-генерация включена</div>`;return;}
   const last=new Date(c.last_generated_at+"Z");
   const nextMs=last.getTime()+(c.interval_hours||12)*3600000;
@@ -1117,8 +1118,11 @@ async function renderBilling(){
       <div id="ref_block" class="text-faint">Загрузка…</div>
     </div>
     <div class="card" style="margin-bottom:16px">
-      <div class="card-title">История платежей</div>
-      <div id="payList" class="text-faint">Загрузка…</div>
+      <button onclick="togglePayHistory()" id="pay_hist_btn"
+        style="background:none;border:none;cursor:pointer;font-size:14px;font-weight:600;color:var(--text);display:flex;align-items:center;gap:6px;width:100%;padding:0 0 12px">
+        📋 История платежей <span id="pay_hist_arrow" style="font-size:12px;color:var(--text-faint)">▶</span>
+      </button>
+      <div id="payList" class="hidden text-faint"></div>
     </div>
     <div style="text-align:center;margin-top:16px;padding-bottom:8px">
       <button class="btn-danger btn-sm" onclick="deleteAccount()" style="font-size:12px;opacity:.6">Удалить аккаунт</button>
@@ -1138,15 +1142,27 @@ async function renderBilling(){
       </div>
       <div class="hint" style="margin-top:8px">Приглашений: <b>${me.referrals_count||0}</b></div>`;
   }catch(_){}
-  try{
-    const ps=await api("GET","/payments");
-    $("payList").innerHTML=ps.length
-      ?ps.map(p=>`<div class="src-row">
-          <span class="src-url">${new Date(p.created_at+"Z").toLocaleString("ru-RU")} · ${fmt(p.tokens)} ток.</span>
-          <span class="chip ${p.status==="paid"?"chip-green":"chip-orange"}">${p.status==="paid"?"оплачено":"ожидает"}</span>
-        </div>`).join("")
-      :`<p style="font-size:13px;color:var(--text-faint)">Платежей пока не было.</p>`;
-  }catch(_){}
+  // История платежей загружается лениво при раскрытии
+  window._loadPayHistory = async function(){
+    try{
+      const ps=await api("GET","/payments");
+      $("payList").innerHTML=ps.length
+        ?ps.map(p=>`<div class="src-row">
+            <span class="src-url">${new Date(p.created_at+"Z").toLocaleString("ru-RU")} · ${fmt(p.tokens)} ток.</span>
+            <span class="chip ${p.status==="paid"?"chip-green":"chip-orange"}">${p.status==="paid"?"оплачено":"ожидает"}</span>
+          </div>`).join("")
+        :`<p style="font-size:13px;color:var(--text-faint)">Платежей пока не было.</p>`;
+    }catch(_){}
+  };
+}
+
+function togglePayHistory(){
+  const list=$("payList"),arrow=$("pay_hist_arrow");
+  if(!list) return;
+  const hidden=list.classList.contains("hidden");
+  list.classList.toggle("hidden",!hidden);
+  if(arrow) arrow.textContent=hidden?"▼":"▶";
+  if(hidden && window._loadPayHistory) window._loadPayHistory();
 }
 
 async function buy(pid){
@@ -1192,6 +1208,7 @@ async function toggleChannelEnabled(){
     App._chan.enabled=newVal;
     const btn=$("pause_btn");
     if(btn){btn.textContent=newVal?"⏸ Пауза":"▶ Возобновить";btn.className=newVal?"btn-outline btn-sm":"btn btn-sm";}
+    renderTimer();
     toast(newVal?"Канал запущен":"Публикация приостановлена","ok");
   }catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
 }
@@ -1313,7 +1330,7 @@ window.addSource=addSource;window.delSource=delSource;
 window.toggleHistory=toggleHistory;window.toggleExpand=toggleExpand;window.showPicker=showPicker;window.doSchedule=doSchedule;
 window.toggleEdit=toggleEdit;window.savePost=savePost;window.publishPost=publishPost;
 window.rejectPost=rejectPost;window.deletePost=deletePost;window.regenPost=regenPost;
-window.testPost=testPost;window.buy=buy;window.deleteAccount=deleteAccount;
+window.testPost=testPost;window.buy=buy;window.togglePayHistory=togglePayHistory;window.deleteAccount=deleteAccount;
 window.ncPickType=ncPickType;window.pickChannelType=pickChannelType;window.openTgConnect=openTgConnect;window.toggleChannelEnabled=toggleChannelEnabled;window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
 window.ncSelect=ncSelect;window.ncP=ncP;window.ncHz=ncHz;window.ncSkipVerify=ncSkipVerify;window.ncShowVerify=ncShowVerify;
 window.sendConsult=sendConsult;window.addSuggestedRule=addSuggestedRule;

@@ -386,6 +386,14 @@ body { overflow-x: hidden; position: relative; }
   body { padding-bottom: env(safe-area-inset-bottom); }
 }
 
-/* ── Back link darker ────────────────────────── */
-.back-link { color: var(--text-dim) !important; font-weight: 500; }
-.back-link:hover { color: var(--text) !important; }
+/* ── Back link ───────────────────────────────── */
+.back-link {
+  color: var(--accent) !important;
+  font-weight: 600 !important;
+  font-size: 13px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 0;
+}
+.back-link:hover { opacity: 0.75; }
