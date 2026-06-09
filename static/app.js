@@ -193,14 +193,20 @@ function renderNewChannel(){
         <input id="nc_title" placeholder="Например: Крипта без воды" maxlength="80"></label>
 
       <label class="field mt"><span class="field-label">@username канала или ссылка t.me/</span>
-        <div class="row" style="gap:8px">
-          <input id="nc_chat" placeholder="@my_channel или https://t.me/channel" style="flex:1">
-          <button class="btn-outline btn-sm" onclick="ncVerify()" id="nc_vbtn" style="white-space:nowrap">Проверить</button>
+        <div id="nc_verify_block">
+          <div class="row" style="gap:8px">
+            <input id="nc_chat" placeholder="@my_channel или https://t.me/channel" style="flex:1">
+            <button class="btn-outline btn-sm" onclick="ncVerify()" id="nc_vbtn" style="white-space:nowrap">Проверить</button>
+          </div>
+          <div class="hint">1. Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором.<br>2. Вставь @username. 3. Нажми «Проверить».</div>
+          <div id="nc_vmsg" style="font-size:13px;margin-top:6px"></div>
+          <button class="btn-ghost btn-sm" onclick="ncSkipVerify()"
+            style="margin-top:6px;font-size:12px;color:var(--text-faint)">Подключить позже →</button>
         </div>
-        <div class="hint">1. Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором.<br>2. Вставь @username. 3. Нажми «Проверить».</div>
-        <div id="nc_vmsg" style="font-size:13px;margin-top:6px"></div>
-        <button class="btn-ghost btn-sm" onclick="$('nc_vmsg').textContent='Подключишь позже в настройках';$('nc_vmsg').style.color='var(--text-faint)'"
-          style="margin-top:6px;font-size:12px;color:var(--text-faint)">Подключить позже →</button>
+        <div id="nc_verify_skipped" class="hidden" style="font-size:13px;color:var(--text-faint);padding:8px 0">
+          ✓ Пропущено — подключите канал позже в настройках.
+          <button class="btn-ghost btn-sm" onclick="ncShowVerify()" style="font-size:12px;margin-left:4px">Подключить сейчас</button>
+        </div>
       </label>
 
       <label class="field mt"><span class="field-label">О чём канал</span>
@@ -335,6 +341,17 @@ function ncHz(val,btn){
   _ncHz=val;
   document.querySelectorAll("#nc_hzs button").forEach(b=>b.classList.remove("on"));
   btn.classList.add("on");
+}
+
+function ncSkipVerify(){
+  const block=$("nc_verify_block"),skipped=$("nc_verify_skipped");
+  if(block) block.classList.add("hidden");
+  if(skipped) skipped.classList.remove("hidden");
+}
+function ncShowVerify(){
+  const block=$("nc_verify_block"),skipped=$("nc_verify_skipped");
+  if(block) block.classList.remove("hidden");
+  if(skipped) skipped.classList.add("hidden");
 }
 
 async function ncVerify(){
@@ -635,12 +652,27 @@ function renderSettings(){
       <label class="field"><span class="field-label">Название</span>
         <input id="f_title" value="${esc(c.title)}"></label>
       <label class="field mt"><span class="field-label">@username, ссылка t.me/ или ID</span>
-        <div class="row" style="gap:8px">
-          <input id="f_chat" value="${esc(c.tg_chat)}" placeholder="@my_channel" style="flex:1">
-          <button class="btn-outline btn-sm" onclick="verifyChannel()" id="verBtn" style="white-space:nowrap">Проверить</button>
-        </div>
-        <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации.</div>
-        <div id="verMsg" style="font-size:13px;margin-top:6px"></div>
+        ${c.verified
+          ? `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--green-bg);border-radius:10px;margin-bottom:6px">
+               <span style="color:var(--green);font-weight:600">✓ Проверено</span>
+               <span style="font-family:monospace;font-size:13px;color:var(--text-dim)">${esc(c.tg_chat)}</span>
+               <button class="btn-ghost btn-sm" onclick="showVerifyInput()" style="margin-left:auto;font-size:12px">Изменить</button>
+             </div>
+             <div id="verifyInputBlock" class="hidden">
+               <div class="row" style="gap:8px">
+                 <input id="f_chat" value="${esc(c.tg_chat)}" placeholder="@my_channel" style="flex:1">
+                 <button class="btn-outline btn-sm" onclick="verifyChannel()" id="verBtn" style="white-space:nowrap">Проверить</button>
+               </div>
+               <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации.</div>
+               <div id="verMsg" style="font-size:13px;margin-top:6px"></div>
+             </div>`
+          : `<div class="row" style="gap:8px">
+               <input id="f_chat" value="${esc(c.tg_chat)}" placeholder="@my_channel" style="flex:1">
+               <button class="btn-outline btn-sm" onclick="verifyChannel()" id="verBtn" style="white-space:nowrap">Проверить</button>
+             </div>
+             <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации.</div>
+             <div id="verMsg" style="font-size:13px;margin-top:6px"></div>`
+        }
       </label>
     </div>
     <div class="card">
@@ -992,15 +1024,28 @@ async function saveAdvanced(){
     toast(msg,"err");
   }
 }
+function showVerifyInput(){
+  const block=$("verifyInputBlock");if(block) block.classList.remove("hidden");
+}
+
 async function verifyChannel(){
   const chat=($("f_chat")||{value:""}).value.trim();if(!chat) return toast("Введите @username или ссылку","err");
-  $("verBtn").innerHTML='<span class="spinner"></span>';
+  const btn=$("verBtn");if(btn) btn.innerHTML='<span class="spinner"></span>';
   try{
     await api("PATCH","/channels/"+App._chan.id,{tg_chat:chat});
     const r=await api("POST","/channels/"+App._chan.id+"/verify");
-    $("verMsg").textContent=r.message;$("verMsg").style.color=r.ok?"var(--green)":"var(--red)";
-  }catch(e){$("verMsg").textContent=e.message;$("verMsg").style.color="var(--red)";}
-  $("verBtn").innerHTML="Проверить";
+    if(r.ok){
+      App._chan.tg_chat=chat;App._chan.verified=true;
+      toast("Канал проверен ✓","ok");
+      renderSettings(); // перерисуем — покажет статус «Проверено»
+    } else {
+      const msg=$("verMsg");if(msg){msg.textContent=r.message;msg.style.color="var(--red)";}
+      if(btn) btn.innerHTML="Проверить";
+    }
+  }catch(e){
+    const msg=$("verMsg");if(msg){msg.textContent=e.message;msg.style.color="var(--red)";}
+    if(btn) btn.innerHTML="Проверить";
+  }
 }
 async function analyzeChannel(){
   const link=($("f_analyze")||{value:""}).value.trim();if(!link) return;
@@ -1196,14 +1241,28 @@ async function regenPost(id){
 }
 
 async function openTgConnect(){
-  // Если user не загружен — загружаем
-  if(!App.user?.id) await refreshUser();
-  const uid=App.user?.id;
-  if(!uid){toast("Не удалось определить аккаунт","err");return;}
-  const bot=App.cfg?.bot_username||"trpst_bot";
-  const url="https://t.me/"+bot+"?start=u"+uid;
-  if(window.Telegram?.WebApp?.openLink){
-    window.Telegram.WebApp.openLink(url);
+  // Гарантируем что user загружен
+  if(!App.user || !App.user.id){
+    try{ App.user = await api("GET","/me"); }catch(e){}
+  }
+  const uid = App.user?.id;
+  if(!uid){
+    // Нет токена — пользователь не авторизован (например Mini App без localStorage)
+    const twa = window.Telegram?.WebApp;
+    if(twa){
+      twa.showAlert("Войдите в аккаунт на сайте autopost26.up.railway.app, а затем откройте уведомления снова.");
+    } else {
+      toast("Не удалось определить аккаунт. Попробуйте войти заново.","err");
+    }
+    return;
+  }
+  const bot = App.cfg?.bot_username || "trpst_bot";
+  const url = "https://t.me/" + bot + "?start=u" + uid;
+  const twa = window.Telegram?.WebApp;
+  if(twa?.openLink){
+    twa.openLink(url);
+  } else if(twa?.openTelegramLink){
+    twa.openTelegramLink(url);
   } else {
     window.open(url,"_blank");
   }
@@ -1248,7 +1307,7 @@ async function boot(){
 window.go=go;window.logout=logout;window.setTab=setTab;
 window.pickLen=pickLen;window.pickOpt=pickOpt;window.pickAdv=pickAdv;
 window.saveChannel=saveChannel;window.saveAdvanced=saveAdvanced;
-window.verifyChannel=verifyChannel;window.analyzeChannel=analyzeChannel;
+window.showVerifyInput=showVerifyInput;window.verifyChannel=verifyChannel;window.analyzeChannel=analyzeChannel;
 window.deleteChannel=deleteChannel;window.openGenPanel=openGenPanel;window.generateNow=generateNow;
 window.addSource=addSource;window.delSource=delSource;
 window.toggleHistory=toggleHistory;window.toggleExpand=toggleExpand;window.showPicker=showPicker;window.doSchedule=doSchedule;
@@ -1256,7 +1315,7 @@ window.toggleEdit=toggleEdit;window.savePost=savePost;window.publishPost=publish
 window.rejectPost=rejectPost;window.deletePost=deletePost;window.regenPost=regenPost;
 window.testPost=testPost;window.buy=buy;window.deleteAccount=deleteAccount;
 window.ncPickType=ncPickType;window.pickChannelType=pickChannelType;window.openTgConnect=openTgConnect;window.toggleChannelEnabled=toggleChannelEnabled;window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
-window.ncSelect=ncSelect;window.ncP=ncP;window.ncHz=ncHz;
+window.ncSelect=ncSelect;window.ncP=ncP;window.ncHz=ncHz;window.ncSkipVerify=ncSkipVerify;window.ncShowVerify=ncShowVerify;
 window.sendConsult=sendConsult;window.addSuggestedRule=addSuggestedRule;
 window.addRule=addRule;window.deleteRule=deleteRule;
 
