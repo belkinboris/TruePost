@@ -142,7 +142,7 @@ function topbar(backView,backLabel){
 }
 
 function renderFooter(){
-  return `<div style="text-align:center;padding:32px 16px 16px;font-size:12px;color:var(--text-faint);line-height:1.8">
+  return `<div style="margin-top:auto;text-align:center;padding:48px 16px 24px;font-size:12px;color:var(--text-faint);line-height:1.8">
     ИП Белкин Б.Б. · ИНН 771387918350 · ОГРНИП 324774600432188<br>
     <a href="/legal/offer" target="_blank" style="color:var(--text-faint)">Оферта</a> &nbsp;·&nbsp;
     <a href="/legal/privacy" target="_blank" style="color:var(--text-faint)">Конфиденциальность</a> &nbsp;·&nbsp;
@@ -483,7 +483,7 @@ async function ncGenerate(){
       if(loadEl){const fs=loadEl.querySelector("div");if(fs) fs.remove();}
       const errMsg=(e.message||"").toLowerCase();
       const human=errMsg.includes("токен")||errMsg.includes("limit")||errMsg.includes("закончил")
-        ? "Закончились токены. Пополни баланс в разделе «Тарифы»."
+        ? "Посты закончились. Пополни баланс в разделе «Тарифы»."
         : errMsg.includes("529")||errMsg.includes("overload")
         ? "Серверы ИИ перегружены. Попробуй через минуту."
         : (e.message||"Не удалось сгенерировать");
@@ -500,7 +500,7 @@ async function ncGenerate(){
   if(!okPosts.length){
     $("ob_posts").insertAdjacentHTML("beforeend",`
       <div style="padding:16px;background:var(--accent-soft);border-radius:var(--radius);text-align:center">
-        <div style="font-size:14px;color:var(--accent-dark);margin-bottom:10px">Не удалось создать посты. Проверь баланс токенов.</div>
+        <div style="font-size:14px;color:var(--accent-dark);margin-bottom:10px">Не удалось создать посты. Проверь баланс в разделе «Тарифы».</div>
         <button class="btn" onclick="go('billing')">Перейти к тарифам →</button>
       </div>`);
     btn.disabled=false;btn.textContent="✦ Попробовать снова";
@@ -831,7 +831,7 @@ async function testPost(){
     const posts=await api("GET","/channels/"+App._chan.id+"/posts");
     const p=posts.find(x=>x.id===r.post_id)||{text:"",tokens_used:0,id:r.post_id};
     $("test_result").innerHTML=`<div class="card" style="background:var(--surface2)">
-      <div style="font-size:11px;color:var(--text-faint);margin-bottom:8px">${fmt(r.tokens_used)} токенов</div>
+
       <div class="post-body">${renderTg(p.text)}</div>
       <div class="post-actions" style="margin-top:10px">
         <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Опубликовать</button>
@@ -1155,7 +1155,7 @@ async function generateNow(){
   while(attempts<3){
     try{
       const r=await api("POST","/channels/"+App._chan.id+"/generate",topic?{topic}:{});
-      toast(`Готово! ${fmt(r.tokens_used)} токенов`,"ok");
+      toast("Готово ✓","ok");
       if($("genPanel")) $("genPanel").classList.add("hidden");
       if($("genTopic")) $("genTopic").value="";
       App.tab="queue";renderChannel();return;
@@ -1172,14 +1172,15 @@ async function generateNow(){
 async function renderBilling(){
   await refreshUser();
   const plans=[
-    {id:"p1",name:"Старт",price:"490 ₽/мес",channels:1,posts:90},
-    {id:"p2",name:"Про",price:"990 ₽/мес",channels:3,posts:300,popular:true},
-    {id:"p3",name:"Бизнес",price:"2 490 ₽/мес",channels:10,posts:1500},
-    {id:"p4",name:"Агентство",price:"4 990 ₽/мес",channels:0,posts:5000},
+    {id:"p1",name:"Старт",price:"990 ₽/мес",channels:1,postsMin:30,postsMax:60},
+    {id:"p2",name:"Про",price:"2 490 ₽/мес",channels:3,postsMin:75,postsMax:150,popular:true},
+    {id:"p3",name:"Бизнес",price:"7 990 ₽/мес",channels:10,postsMin:250,postsMax:500},
+    {id:"p4",name:"Агентство",price:"14 990 ₽/мес",channels:0,postsMin:500,postsMax:1000},
   ];
   $("app").innerHTML=topbar("dashboard","назад")+`<div class="wrap">
     <div class="page-head"><h1>Тарифы</h1>
-      <p>Баланс: <b class="mono">${fmt(App.user?.token_balance||0)}</b> токенов · ≈${Math.floor((App.user?.token_balance||0)/5000)} постов</p></div>
+      <p>Осталось <b>${Math.floor((App.user?.token_balance||0)/40000)}–${Math.floor((App.user?.token_balance||0)/20000)}</b> постов.<br>
+      <span style="font-size:13px;color:var(--text-faint)">Диапазон зависит от сложности: пост с поиском свежих новостей расходует больше, простой — меньше.</span></p></div>
     ${(!App.cfg?.yookassa_enabled&&!App.cfg?.yoomoney_enabled)?`<div class="card" style="border-color:var(--accent);background:var(--accent-soft);margin-bottom:16px">
       <p style="color:var(--accent-dark)">Приём платежей настраивается.</p></div>`:""}
     <div class="grid grid-2" style="margin-bottom:16px">
@@ -1189,13 +1190,13 @@ async function renderBilling(){
         <div class="p-price" style="font-size:24px">${p.price}</div>
         <div class="p-tokens" style="line-height:1.8">
           📺 ${p.channels===0?"Без лимита каналов":`${p.channels} ${p.channels===1?"канал":"канала"}`}<br>
-          ✦ ${fmt(p.posts)} постов/мес</div>
+          ✦ ${p.postsMin}–${p.postsMax} постов/мес</div>
         <button class="btn" style="width:100%;justify-content:center;margin-top:8px" onclick="buy('${p.id}')">Выбрать</button>
       </div>`).join("")}
     </div>
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">🎁 Реферальная программа</div>
-      <p style="font-size:14px;color:var(--text-dim);margin-bottom:12px">За каждого приглашённого — <b>+50 000 токенов</b> тебе и другу.</p>
+      <p style="font-size:14px;color:var(--text-dim);margin-bottom:12px">За каждого приглашённого — <b>+1–2 поста</b> тебе и другу.</p>
       <div id="ref_block" class="text-faint">Загрузка…</div>
     </div>
     <div class="card" style="margin-bottom:16px">
@@ -1335,7 +1336,7 @@ async function regenPost(id){
   try{
     await api("POST","/posts/"+id+"/reject");
     const r=await api("POST","/channels/"+App._chan.id+"/generate");
-    toast("Перегенерировано — "+fmt(r.tokens_used)+" токенов","ok");renderQueue();
+    toast("Готово ✓","ok");renderQueue();
   }catch(e){toast(e&&e.message?e.message:"Ошибка","err");if(btn){btn.innerHTML="↻ Заново";btn.disabled=false;}}
 }
 
