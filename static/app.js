@@ -725,11 +725,7 @@ function renderSettings(){
         }
       </div>
       <div class="toggle-row">
-        <div class="toggle-info"><b>Новый пост сгенерирован</b></div>
-        <label class="switch"><input type="checkbox" id="sw_n1" ${App.user?.notify_new_post?"checked":""}><span class="slider"></span></label>
-      </div>
-      <div class="toggle-row">
-        <div class="toggle-info"><b>Пост опубликован</b></div>
+        <div class="toggle-info"><b>Пост опубликован</b><small>Уведомление после каждой публикации</small></div>
         <label class="switch"><input type="checkbox" id="sw_n2" ${App.user?.notify_published?"checked":""}><span class="slider"></span></label>
       </div>
       <div class="toggle-row">
@@ -997,14 +993,15 @@ async function saveChannel(){
   };
   if(chatChanged) payload.tg_chat=newChat;
   const notif={
-    notify_new_post:$("sw_n1")?$("sw_n1").checked:false,
     notify_published:$("sw_n2")?$("sw_n2").checked:false,
     notify_low_tokens:$("sw_n3")?$("sw_n3").checked:true,
   };
   try{
     await api("PATCH","/channels/"+App._chan.id,payload);
     await api("PATCH","/me",notif);
-    toast("Сохранено ✓","ok");renderChannel();
+    // Обновляем локально без перерендера — чтобы тумблеры не сбросились
+    if(App.user){ App.user.notify_published=notif.notify_published; App.user.notify_low_tokens=notif.notify_low_tokens; }
+    toast("Сохранено ✓","ok");
   }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
 async function saveAdvanced(){
