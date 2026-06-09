@@ -47,7 +47,7 @@ async def _notify_user_by_id(chat_id: int, text: str):
         logger.warning(f"Уведомление chat_id={chat_id}: {err}")
 
 
-async def generate_for_channel(channel_id: int, topic: str = "") -> dict:
+async def generate_for_channel(channel_id: int, topic: str = "", force_pending: bool = False) -> dict:
     with session() as s:
         channel = s.get(Channel, channel_id)
         if not channel:
@@ -135,7 +135,7 @@ async def generate_for_channel(channel_id: int, topic: str = "") -> dict:
         user.token_balance = max(0, user.token_balance - tokens)
         channel.last_generated_at = datetime.utcnow()
 
-        if channel.auto_publish:
+        if channel.auto_publish and not force_pending:
             result = await telegram_api.send_message(channel.tg_chat, text)
             if result.get("ok"):
                 post.status = "published"
@@ -146,14 +146,21 @@ async def generate_for_channel(channel_id: int, topic: str = "") -> dict:
         s.commit(); s.refresh(post)
         pid = post.id
 
-        # Уведомления
-        if user.notify_new_post and post.status == "pending":
-            await _notify_user(user, f"✦ <b>Новый пост готов</b>\n\nКанал: {channel.title}\n\n{text[:200]}{'...' if len(text) > 200 else ''}")
-        if user.notify_published and post.status == "published":
-            await _notify_user(user, f"✅ <b>Пост опубликован</b>\n\nКанал: {channel.title}")
-        # Предупреждение о токенах
-        if user.notify_low_tokens and prev_balance > LOW_TOKENS_THRESHOLD and user.token_balance <= LOW_TOKENS_THRESHOLD:
-            await _notify_user(user, f"⚠️ <b>Токены заканчиваются</b>\n\nОсталось ~1 пост. Пополните баланс в приложении.")
+        # Читаем всё необходимое для уведомлений пока сессия открыта
+        notify_chat_id = user.tg_chat_id
+        notify_new = user.notify_new_post and post.status == "pending"
+        notify_pub = user.notify_published and post.status == "published"
+        notify_low = user.notify_low_tokens and prev_balance > LOW_TOKENS_THRESHOLD and user.token_balance <= LOW_TOKENS_THRESHOLD
+        chan_title = channel.title
+
+    # Уведомления — вне сессии, с явным chat_id
+    if notify_chat_id:
+        if notify_new:
+            await _notify_user_by_id(notify_chat_id, f"✦ <b>Новый пост готов</b>\n\nКанал: {chan_title}\n\n{text[:200]}{'...' if len(text) > 200 else ''}")
+        if notify_pub:
+            await _notify_user_by_id(notify_chat_id, f"✅ <b>Пост опубликован</b>\n\nКанал: {chan_title}")
+        if notify_low:
+            await _notify_user_by_id(notify_chat_id, f"⚠️ <b>Токены заканчиваются</b>\n\nОсталось ~1 пост. Пополните баланс в приложении.")
 
     # Если пост сразу опубликован (автопилот) — догенерируем очередь
     if pid:
@@ -323,13 +330,9 @@ async def _process_bot_updates():
 
 MIN_QUEUE = 3  # минимум постов в очереди
 
-async def _ensure_queue(published_post_id: int):
-    """После публикации проверяет очередь и догенерирует если меньше MIN_QUEUE."""
+async def _refill_if_active(channel_id: int):
+    """Догенерирует посты до MIN_QUEUE если канал активен."""
     with session() as s:
-        post = s.get(Post, published_post_id)
-        if not post:
-            return
-        channel_id = post.channel_id
         channel = s.get(Channel, channel_id)
         if not channel or not channel.enabled:
             return
@@ -344,10 +347,20 @@ async def _ensure_queue(published_post_id: int):
     if pending_count < MIN_QUEUE:
         for _ in range(MIN_QUEUE - pending_count):
             try:
-                await generate_for_channel(channel_id)
+                await generate_for_channel(channel_id, force_pending=True)
             except Exception as e:
                 logger.warning(f"auto-refill gen: {e}")
                 break
+
+
+async def _ensure_queue(published_post_id: int):
+    """После публикации проверяет очередь и догенерирует если меньше MIN_QUEUE."""
+    with session() as s:
+        post = s.get(Post, published_post_id)
+        if not post:
+            return
+        channel_id = post.channel_id
+    await _refill_if_active(channel_id)
 
 
 async def tick():

@@ -281,6 +281,9 @@ def patch_channel(channel_id: int, data: ChannelPatch, user: User = Depends(curr
             # Сбрасываем verified только если реально поменялся username
             if new_chat != (ch.tg_chat or ""):
                 ch.verified = False
+        # При возобновлении сбрасываем таймер чтобы следующий пост пришёл через полный интервал
+        if payload.get("enabled") is True and not ch.enabled:
+            ch.last_generated_at = None
         for k, v in payload.items():
             setattr(ch, k, v)
         s.add(ch)
@@ -322,7 +325,7 @@ async def verify_channel(channel_id: int, user: User = Depends(current_user)):
 async def generate_channel(channel_id: int, data: PostIn = PostIn(), user: User = Depends(current_user)):
     with session() as s:
         _own_channel(s, channel_id, user)
-    result = await tasks.generate_for_channel(channel_id, topic=data.topic)
+    result = await tasks.generate_for_channel(channel_id, topic=data.topic, force_pending=True)
     if not result["ok"]:
         raise HTTPException(400, result["message"])
     return result
@@ -348,7 +351,7 @@ async def generate_channel_format(
         s.commit()
 
     try:
-        result = await tasks.generate_for_channel(channel_id)
+        result = await tasks.generate_for_channel(channel_id, force_pending=True)
     finally:
         # Возвращаем оригинальный формат
         with session() as s:
@@ -501,19 +504,23 @@ def schedule_post(post_id: int, data: ScheduleIn, user: User = Depends(current_u
 
 
 @app.post("/api/posts/{post_id}/reject")
-def reject_post(post_id: int, user: User = Depends(current_user)):
+async def reject_post(post_id: int, user: User = Depends(current_user)):
     with session() as s:
         p = _own_post(s, post_id, user)
+        channel_id = p.channel_id
         p.status = "rejected"
         s.add(p); s.commit()
+    await tasks._refill_if_active(channel_id)
     return {"ok": True}
 
 
 @app.delete("/api/posts/{post_id}")
-def delete_post(post_id: int, user: User = Depends(current_user)):
+async def delete_post(post_id: int, user: User = Depends(current_user)):
     with session() as s:
         p = _own_post(s, post_id, user)
+        channel_id = p.channel_id
         s.delete(p); s.commit()
+    await tasks._refill_if_active(channel_id)
     return {"ok": True}
 
 
