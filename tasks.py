@@ -389,32 +389,7 @@ async def tick():
 
     for cid in all_verified_ids:
         try:
-            with session() as s:
-                from sqlmodel import select as sel
-                pending = s.exec(sel(Post).where(
-                    Post.channel_id == cid,
-                    Post.status.in_(["pending", "scheduled"])
-                )).all()
-                count = len(pending)
-            if count < MIN_QUEUE:
-                # Генерируем без автопубликации — чтобы посты были видны в очереди
-                with session() as s:
-                    ch = s.get(Channel, cid)
-                    orig_auto = ch.auto_publish
-                    ch.auto_publish = False
-                    s.add(ch); s.commit()
-                try:
-                    for _ in range(MIN_QUEUE - count):
-                        result = await generate_for_channel(cid)
-                        if not result.get("ok"):
-                            break
-                finally:
-                    # Восстанавливаем auto_publish
-                    with session() as s:
-                        ch = s.get(Channel, cid)
-                        if ch:
-                            ch.auto_publish = orig_auto
-                            s.add(ch); s.commit()
+            await _refill_if_active(cid)
         except Exception as e:
             logger.warning(f"queue-refill канал {cid}: {e}")
 

@@ -283,9 +283,10 @@ def patch_channel(channel_id: int, data: ChannelPatch, user: User = Depends(curr
             # Сбрасываем verified только если реально поменялся username
             if new_chat != (ch.tg_chat or ""):
                 ch.verified = False
-        # При возобновлении сбрасываем таймер чтобы следующий пост пришёл через полный интервал
+        # При возобновлении ставим last_generated_at = now
+        # чтобы следующая авто-генерация была через полный интервал, а не немедленно
         if payload.get("enabled") is True and not ch.enabled:
-            ch.last_generated_at = None
+            ch.last_generated_at = datetime.utcnow()
         for k, v in payload.items():
             setattr(ch, k, v)
         s.add(ch)
