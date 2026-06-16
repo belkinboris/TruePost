@@ -918,6 +918,19 @@ def legal_privacy():
 def legal_refund():
     return FileResponse("static/legal/refund.html")
 
+
+@app.get("/landing")
+def landing():
+    return FileResponse("static/landing.html")
+
+@app.get("/robots.txt")
+def robots_txt():
+    return FileResponse("static/robots.txt", media_type="text/plain")
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    return FileResponse("static/sitemap.xml", media_type="application/xml")
+
 @app.get("/")
 def index():
     return FileResponse("static/index.html")
