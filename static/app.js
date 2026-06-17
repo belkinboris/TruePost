@@ -19,6 +19,14 @@ const $ = id => document.getElementById(id);
 const esc = s => (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":'&#39;'}[c]));
 const fmt = n => (n||0).toLocaleString("ru-RU");
 
+function trackGoal(goal, params={}){
+  try{
+    if(window.ym && window.YM_COUNTER_ID){
+      window.ym(window.YM_COUNTER_ID,"reachGoal",goal,params);
+    }
+  }catch(_){}
+}
+
 function cleanPostText(text){
   if(!text) return "";
   let t=text.trim();
@@ -108,8 +116,11 @@ function renderAuth(mode="login"){
     const body={email,password};
     if(mode==="register"&&$("ref")&&$("ref").value.trim()) body.ref_code=$("ref").value.trim();
     try{
-      const r=await api("POST",mode==="login"?"/login":"/register",body);
-      App.token=r.token;localStorage.setItem("ap_token",r.token);await boot();
+      const isRegister = mode === "register";
+      const r=await api("POST",isRegister?"/register":"/login",body);
+      App.token=r.token;localStorage.setItem("ap_token",r.token);
+      trackGoal(isRegister?"register_success":"login_success");
+      await boot();
     }catch(e){
       let msg=e.message||"Что-то пошло не так";
       if(msg.includes("уже есть")) msg="Этот email уже зарегистрирован.";
@@ -403,6 +414,7 @@ async function ncAnalyze(){
     _ncStyleProfile=r.profile||"";
     $("nc_sp").textContent=_ncStyleProfile.replace(/#{1,3} /g,"").replace(/\*\*/g,"");
     $("nc_sp").classList.remove("hidden");
+    trackGoal("style_analyzed",{source:"onboarding"});
     toast("Стиль изучен","ok");
   }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
   btn.innerHTML="Изучить";btn.disabled=false;
@@ -429,6 +441,7 @@ async function ncGenerate(){
     });
   }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");btn.innerHTML="✦ Сгенерировать три варианта поста";btn.disabled=false;return;}
   App.channelId=chan.id;App._onboardPosts=[];
+  trackGoal("channel_created",{source:"onboarding",channel_id:chan.id});
 
   $("nc_results").classList.remove("hidden");
   $("nc_results").innerHTML=`
@@ -455,11 +468,16 @@ async function ncGenerate(){
     {key:"tips",label:"Советы",desc:"Конкретные шаги"},
     {key:"question",label:"Вопрос",desc:"Вовлечение"},
   ];
+  let _ymOnboardPostGenerated=false;
   for(let i=0;i<formats.length;i++){
     const f=formats[i];
     try{
       const r=await api("POST",`/channels/${chan.id}/generate_format`,{post_format:f.key});
       App._onboardPosts.push({...f,text:r.text,post_id:r.post_id});
+      if(!_ymOnboardPostGenerated){
+        trackGoal("post_generated",{source:"onboarding",channel_id:chan.id});
+        _ymOnboardPostGenerated=true;
+      }
       // Убираем один скелетон по мере появления поста
       const loadEl=$("ob_load");
       if(loadEl){
@@ -527,6 +545,7 @@ async function ncSelect(idx){
         await api("POST",`/posts/${App._onboardPosts[i].post_id}/reject`).catch(()=>{});
     }
     await api("PATCH",`/channels/${App.channelId}`,{onboarded:true});
+    trackGoal("onboarding_complete",{channel_id:App.channelId});
     toast("Канал настроен ✓","ok");go("channel",App.channelId);
   }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
 }
@@ -830,6 +849,7 @@ async function testPost(){
     const r=await api("POST","/channels/"+App._chan.id+"/generate",{});
     const posts=await api("GET","/channels/"+App._chan.id+"/posts");
     const p=posts.find(x=>x.id===r.post_id)||{text:"",tokens_used:0,id:r.post_id};
+    trackGoal("post_generated",{source:"test",channel_id:App._chan.id});
     $("test_result").innerHTML=`<div class="card" style="background:var(--surface2)">
 
       <div class="post-body">${renderTg(p.text)}</div>
@@ -1118,6 +1138,7 @@ async function verifyChannel(){
     const r=await api("POST","/channels/"+App._chan.id+"/verify");
     if(r.ok){
       App._chan.tg_chat=chat;App._chan.verified=true;
+      trackGoal("telegram_verified",{channel_id:App._chan.id});
       toast("Канал проверен ✓","ok");
       renderSettings(); // перерисуем — покажет статус «Проверено»
     } else {
@@ -1137,6 +1158,7 @@ async function analyzeChannel(){
     App._chan.style_profile=r.profile;
     const el=$("analyze_result");
     if(el) el.innerHTML=`<div class="hint" style="color:var(--green);margin-top:6px">✓ Изучено постов: ${r.analyzed_posts}. Стиль сохранён.</div>`;
+    trackGoal("style_analyzed",{source:"channel",channel_id:App._chan.id});
     toast("Стиль изучен ✓","ok");
   }catch(e){const el=$("analyze_result");if(el) el.innerHTML=`<div class="hint" style="color:var(--red);margin-top:6px">${esc(e.message)}</div>`;}
   btn.innerHTML="Изучить";btn.disabled=false;
@@ -1155,6 +1177,7 @@ async function generateNow(){
   while(attempts<3){
     try{
       const r=await api("POST","/channels/"+App._chan.id+"/generate",topic?{topic}:{});
+      trackGoal("post_generated",{source:"manual",channel_id:App._chan.id});
       toast("Готово ✓","ok");
       if($("genPanel")) $("genPanel").classList.add("hidden");
       if($("genTopic")) $("genTopic").value="";
@@ -1228,6 +1251,15 @@ async function renderBilling(){
   window._loadPayHistory = async function(){
     try{
       const ps=await api("GET","/payments");
+      ps.forEach(p=>{
+        if(p.status==="paid"){
+          const key="ym_paid_"+(p.id||p.label||p.created_at);
+          if(!localStorage.getItem(key)){
+            trackGoal("payment_success",{package_id:p.package_id||"",tokens:p.tokens||0,rub:p.rub||0});
+            localStorage.setItem(key,"1");
+          }
+        }
+      });
       $("payList").innerHTML=ps.length
         ?ps.map(p=>`<div class="src-row">
             <span class="src-url">${new Date(p.created_at+"Z").toLocaleString("ru-RU")} · ${fmt(p.tokens)} ток.</span>
@@ -1250,6 +1282,7 @@ function togglePayHistory(){
 async function buy(pid){
   try{
     const r = await api("POST", "/billing/buy", {package_id: pid});
+    trackGoal("payment_started",{package_id:pid});
     if(!r.payment_url){ toast("Не удалось получить ссылку на оплату","err"); return; }
     // Telegram Mini App — используем встроенный метод
     if(window.Telegram?.WebApp?.openLink){
@@ -1430,7 +1463,7 @@ window.testPost=testPost;window.buy=buy;window.togglePayHistory=togglePayHistory
 window.ncPickType=ncPickType;window.pickChannelType=pickChannelType;window.openTgConnect=openTgConnect;window.toggleChannelEnabled=toggleChannelEnabled;window.verifyTgUsername=verifyTgUsername;window.ncVerify=ncVerify;window.ncAnalyze=ncAnalyze;window.ncGenerate=ncGenerate;
 window.ncSelect=ncSelect;window.ncP=ncP;window.ncHz=ncHz;window.ncSkipVerify=ncSkipVerify;window.ncShowVerify=ncShowVerify;
 window.sendConsult=sendConsult;window.addSuggestedRule=addSuggestedRule;
-window.addRule=addRule;window.deleteRule=deleteRule;
+window.addRule=addRule;window.deleteRule=deleteRule;window.trackGoal=trackGoal;
 
 // Ждём загрузки DOM перед запуском
 if (document.readyState === "loading") {
