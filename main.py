@@ -87,6 +87,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Автопост", lifespan=lifespan)
 
+from internal_metrics import router as internal_metrics_router
+app.include_router(internal_metrics_router)
 
 # ── Авторизация ───────────────────────────────────────────────
 
