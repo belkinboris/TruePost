@@ -25,7 +25,7 @@ import telegram_api
 import tasks
 from database import (
     init_db, session,
-    User, Channel, Source, Post, Payment, Referral,
+    User, Channel, Source, Post, Payment, Referral, LandingEvent,
 )
 from pydantic import BaseModel as _BaseModel
 from typing import Optional as _Opt
@@ -89,6 +89,9 @@ app = FastAPI(title="Автопост", lifespan=lifespan)
 
 from internal_metrics import router as internal_metrics_router
 app.include_router(internal_metrics_router)
+
+from internal_landing_funnel import router as landing_funnel_router
+app.include_router(landing_funnel_router)
 
 # ── Авторизация ───────────────────────────────────────────────
 
@@ -168,6 +171,24 @@ def register(data: AuthIn):
         s.commit()
         s.refresh(user)
 
+        # CTA/Journey Diagnostics: связываем регистрацию с сессией лендинга,
+        # если она была передана. User не трогаем -- пишем только в LandingEvent
+        # (новая таблица, безопасно создаётся через create_all, без ALTER TABLE
+        # на существующих таблицах). Не блокирует регистрацию при сбое.
+        if data.lp_session:
+            try:
+                s.add(LandingEvent(
+                    session_id=data.lp_session[:64],
+                    event="register_success",
+                    user_id=user.id,
+                    utm_source=(data.utm_source or "")[:50],
+                    utm_medium=(data.utm_medium or "")[:50],
+                    utm_campaign=(data.utm_campaign or "")[:100],
+                ))
+                s.commit()
+            except Exception:
+                pass
+
         # Начисляем бонус рефереру
         if referrer:
             referrer_obj = s.get(User, referrer.id)
@@ -187,6 +208,60 @@ def register(data: AuthIn):
                 s.refresh(user)
 
         return {"token": security.create_token(user.id), "email": user.email}
+
+
+class _LandingEventIn(_BaseModel):
+    session_id: str
+    event: str
+    url: str = ""
+    utm_source: str = ""
+    utm_medium: str = ""
+    utm_campaign: str = ""
+    yclid: str = ""
+    user_agent: str = ""
+
+
+_ALLOWED_LANDING_EVENTS = {
+    "landing_view",
+    "cta_hero_bot_click",
+    "cta_hero_app_click",
+    "cta_header_click",
+    "cta_final_click",
+    "bot_start_from_landing",
+    "web_register_opened",
+    "register_success",
+    "activation_1",
+}
+
+
+@app.post("/api/landing-event")
+def landing_event(data: _LandingEventIn, request: Request):
+    """
+    Read-only диагностика пути landing -> Telegram/web -> registration
+    (CTA/Journey Diagnostics). Не влияет на бизнес-логику, не блокирует
+    пользователя при сбое -- событие просто не записывается.
+    """
+    if not data.session_id or not data.event:
+        return {"ok": False}
+    if data.event not in _ALLOWED_LANDING_EVENTS:
+        return {"ok": False}
+    try:
+        ua = data.user_agent or request.headers.get("user-agent", "")
+        with session() as s:
+            s.add(LandingEvent(
+                session_id=data.session_id[:64],
+                event=data.event,
+                url=(data.url or "")[:500],
+                utm_source=(data.utm_source or "")[:50],
+                utm_medium=(data.utm_medium or "")[:50],
+                utm_campaign=(data.utm_campaign or "")[:100],
+                yclid=(data.yclid or "")[:100],
+                user_agent=ua[:300],
+            ))
+            s.commit()
+    except Exception:
+        pass
+    return {"ok": True}
 
 
 @app.post("/api/login")

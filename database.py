@@ -125,6 +125,27 @@ class Referral(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class LandingEvent(SQLModel, table=True):
+    """
+    Журнал событий пути landing -> Telegram/web -> registration.
+    Только для диагностики воронки (CTA/Journey Diagnostics) -- не используется
+    в основной бизнес-логике продукта, не влияет на работу приложения.
+    Read-only снаружи: пишется через POST /api/landing-event, читается через
+    GET /api/internal/landing-funnel-diagnostics.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    session_id: str = Field(index=True)          # landing_session_id из localStorage/cookie
+    event: str = Field(index=True)                 # landing_view, cta_hero_bot_click, bot_start_from_landing, register_success...
+    user_id: Optional[int] = None                   # если событие связано с конкретным юзером (register_success) -- без FK, чисто для диагностики
+    url: str = ""
+    utm_source: str = ""
+    utm_medium: str = ""
+    utm_campaign: str = ""
+    yclid: str = ""
+    user_agent: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 def init_db():
     SQLModel.metadata.create_all(engine)
 
