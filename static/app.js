@@ -28,6 +28,8 @@ function trackGoal(goal, params={}){
 }
 
 // ── CTA/Journey Diagnostics: захват lp_session + UTM из URL лендинга (Part 4) ──
+const _sentLandingEvents = new Set(); // дедуп в рамках одной загрузки страницы
+
 function captureLandingSession(){
   try{
     // 1. Telegram Mini App: ?startapp=lp_<id> приходит как start_param, не как обычный query-параметр
@@ -65,6 +67,23 @@ function logLandingEventWeb(eventName){
   try{
     const sessionId=localStorage.getItem("ap_lp_session");
     if(!sessionId) return; // не из лендинга — не логируем, не нужный шум
+
+    // Дедуп: одно и то же (session_id, event) не отправляем повторно за время
+    // жизни вкладки. Для событий которые логически должны случиться один раз
+    // за сессию лендинга (web_register_opened, register_success) дедуп
+    // дополнительно переживает full page reload через localStorage —
+    // иначе повторный boot() после регистрации или ре-рендер страницы
+    // отправляет событие ещё раз.
+    const dedupKey=sessionId+":"+eventName;
+    if(_sentLandingEvents.has(dedupKey)) return;
+    const PERSISTENT_DEDUP_EVENTS=["web_register_opened","register_success","bot_start_from_landing"];
+    if(PERSISTENT_DEDUP_EVENTS.includes(eventName)){
+      const sentKey="ap_lp_sent_"+eventName+"_"+sessionId;
+      if(localStorage.getItem(sentKey)) return;
+      localStorage.setItem(sentKey,"1");
+    }
+    _sentLandingEvents.add(dedupKey);
+
     const utm=JSON.parse(localStorage.getItem("ap_lp_utm")||"{}");
     fetch("/api/landing-event",{
       method:"POST",
@@ -188,7 +207,8 @@ function renderAuth(mode="login"){
       const r=await api("POST",isRegister?"/register":"/login",body);
       App.token=r.token;localStorage.setItem("ap_token",r.token);
       trackGoal(isRegister?"register_success":"login_success");
-      if(isRegister) logLandingEventWeb("register_success");
+      // register_success в LandingEvent пишет backend /api/register
+      // после реального создания пользователя — фронт не дублирует это событие.
       await boot();
     }catch(e){
       let msg=e.message||"Что-то пошло не так";
