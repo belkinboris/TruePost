@@ -46,6 +46,25 @@ _TRASH_PATTERNS = [
 ]
 _TRASH_RE = re.compile(r"^(" + "|".join(_TRASH_PATTERNS) + r")\s*$", re.IGNORECASE)
 
+# Детектор "это не пост, а отказ/уточняющий вопрос модели" — срабатывает когда
+# web_search не нашёл релевантных фактов и Claude вместо поста переспрашивает
+# тему (иногда на английском, несмотря на запрет в системном промпте). Это не
+# thinking-блок в начале текста, а весь ответ целиком, поэтому ловим отдельно.
+_REFUSAL_PATTERNS = [
+    r"what topic", r"please (share|specify|provide|clarify)", r"could you (clarify|specify|provide)",
+    r"i (need|don't have|couldn't find|wasn't able)", r"let me know",
+    r"уточните тему", r"какую тему", r"не могу найти", r"не удалось найти",
+    r"подскажите[,]? пожалуйста", r"расскажите подробнее", r"какая тема",
+]
+_REFUSAL_RE = re.compile("|".join(_REFUSAL_PATTERNS), re.IGNORECASE)
+
+
+def _looks_like_refusal(text: str) -> bool:
+    """True если текст похож на отказ/уточняющий вопрос, а не на готовый пост."""
+    if not text or len(text.strip()) < 80:
+        return True  # подозрительно короткий ответ — скорее всего не пост
+    return bool(_REFUSAL_RE.search(text[:300]))  # ищем только в начале, не во всём посте
+
 # Паттерн для определения thinking-блока: абзац до "---" или до пустой строки
 # который выглядит как рассуждение а не пост
 _THINKING_RE = re.compile(
@@ -252,7 +271,24 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
         user_msg = "Напиши пост. Конкретный пример — человек, ситуация, деталь."
 
     text, tokens = await _call_claude(system, user_msg, use_search, max_tokens=650)
-    return _clean_post(text), tokens
+    cleaned = _clean_post(text)
+
+    if _looks_like_refusal(cleaned) and use_search:
+        # Поиск не нашёл релевантных фактов и модель вместо поста переспрашивает
+        # тему. Не показываем это пользователю — тихо перегенерируем обычным
+        # постом по теме, без поиска. Пользователь просто получает результат.
+        logger.info(f"Канал {channel.id}: web_search дал отказ/вопрос вместо поста, fallback без поиска")
+        fallback_msg = f"Напиши пост на тему: «{channel.about}». Конкретный пример — человек, ситуация, деталь. Не нужно искать в интернете, пиши по своим знаниям."
+        text2, tokens2 = await _call_claude(system, fallback_msg, False, max_tokens=650)
+        cleaned2 = _clean_post(text2)
+        if not _looks_like_refusal(cleaned2):
+            return cleaned2, tokens + tokens2
+        # Если и fallback не помог (крайне редкий случай) — возвращаем то что
+        # есть, но это лучше чем пустой экран; _looks_like_refusal минимизирует
+        # такие случаи почти до нуля.
+        return cleaned2 or cleaned, tokens + tokens2
+
+    return cleaned, tokens
 
 
 async def check_news_available(channel: "Channel") -> tuple:
