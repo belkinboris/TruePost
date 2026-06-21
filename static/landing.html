@@ -58,7 +58,7 @@
       <a href="#pricing">Тарифы</a>
       <a href="#faq">FAQ</a>
     </nav>
-    <a class="nav-cta" href="/" onclick="trackGoal('cta_header')">Попробовать</a>
+    <a class="nav-cta" href="/" onclick="return goCTA(event,'cta_header_click','web')">Попробовать</a>
   </header>
 
   <main>
@@ -68,8 +68,8 @@
         <h1>Веди Телеграм-канал регулярно - без ежедневной рутины</h1>
         <p class="lead">Регулярные публикации - главный фактор роста канала. АвтоПост изучает стиль, берёт факты из источников, пишет посты и готовит публикации по расписанию. Вы проверяете результат - или включаете автопубликацию.</p>
         <div class="hero-actions">
-          <a class="btn primary" href="https://t.me/maintrpost_bot" target="_blank" rel="noopener" onclick="trackGoal('cta_hero_bot')">Попробовать в Телеграм бесплатно</a>
-          <a class="btn secondary" href="/" onclick="trackGoal('cta_hero_app')">Открыть веб-версию</a>
+          <a class="btn primary" href="https://t.me/maintrpost_bot" onclick="return goCTA(event,'cta_hero_bot_click','bot')">Попробовать в Телеграм бесплатно</a>
+          <a class="btn secondary" href="/" onclick="return goCTA(event,'cta_hero_app_click','web')">Открыть веб-версию</a>
         </div>
         <p class="micro">Новым пользователям начисляются бесплатные пробные токены. Бот публикует только после подключения канала.</p>
       </div>
@@ -157,7 +157,7 @@
     <section class="final-cta">
       <h2>Начните публиковать регулярно уже сегодня</h2>
       <p>Создайте аккаунт, добавьте тему канала и получите первый вариант поста бесплатно.</p>
-      <a class="btn primary" href="https://t.me/maintrpost_bot" target="_blank" rel="noopener" onclick="trackGoal('cta_final')">Попробовать бесплатно в Телеграм</a>
+      <a class="btn primary" href="https://t.me/maintrpost_bot" onclick="return goCTA(event,'cta_final_click','bot')">Попробовать бесплатно в Телеграм</a>
     </section>
   </main>
 
@@ -169,12 +169,102 @@
   </footer>
 
   <script>
+    // ── CTA/Journey Diagnostics: landing_session_id + UTM/yclid (Part 1) ──
+    function _genSessionId() {
+      return 'lp' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    }
+
+    function getLandingSession() {
+      try {
+        var id = localStorage.getItem('ap_lp_session');
+        if (!id) {
+          id = _genSessionId();
+          localStorage.setItem('ap_lp_session', id);
+        }
+        return id;
+      } catch (e) {
+        return _genSessionId(); // localStorage недоступен — генерируем разовый id, не блокируем CTA
+      }
+    }
+
+    function getUTM() {
+      // Берём UTM из текущего URL, если есть; иначе из ранее сохранённых (первый визит важнее).
+      try {
+        var params = new URLSearchParams(window.location.search);
+        var fresh = {
+          utm_source: params.get('utm_source') || '',
+          utm_medium: params.get('utm_medium') || '',
+          utm_campaign: params.get('utm_campaign') || '',
+          yclid: params.get('yclid') || ''
+        };
+        if (fresh.utm_source || fresh.yclid) {
+          localStorage.setItem('ap_lp_utm', JSON.stringify(fresh));
+          return fresh;
+        }
+        var saved = JSON.parse(localStorage.getItem('ap_lp_utm') || '{}');
+        return saved;
+      } catch (e) {
+        return {};
+      }
+    }
+
     function trackGoal(goal) {
       try {
         if (window.ym && window.YM_COUNTER_ID) window.ym(window.YM_COUNTER_ID, 'reachGoal', goal);
       } catch (e) {}
       return true;
     }
+
+    // ── Логирование событий на backend (Part 2) ──────────────────────────
+    function logLandingEvent(eventName) {
+      try {
+        var utm = getUTM();
+        var payload = {
+          session_id: getLandingSession(),
+          event: eventName,
+          url: window.location.href,
+          utm_source: utm.utm_source || '',
+          utm_medium: utm.utm_medium || '',
+          utm_campaign: utm.utm_campaign || '',
+          yclid: utm.yclid || '',
+          user_agent: navigator.userAgent || ''
+        };
+        // Не блокируем переход пользователя — событие летит в фоне, ошибки игнорируются.
+        fetch('/api/landing-event', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          keepalive: true
+        }).catch(function () {});
+      } catch (e) {}
+    }
+
+    // ── Переход по CTA: трекаем цель + событие, пробрасываем сессию/UTM ──
+    function goCTA(evt, goalName, destination) {
+      trackGoal(goalName);
+      logLandingEvent(goalName);
+
+      var sessionId = getLandingSession();
+      var utm = getUTM();
+      var url;
+      if (destination === 'bot') {
+        url = 'https://t.me/maintrpost_bot?startapp=lp_' + sessionId;
+      } else {
+        var qs = new URLSearchParams({ lp_session: sessionId, source: 'landing' });
+        if (utm.utm_source) qs.set('utm_source', utm.utm_source);
+        if (utm.utm_medium) qs.set('utm_medium', utm.utm_medium);
+        if (utm.utm_campaign) qs.set('utm_campaign', utm.utm_campaign);
+        url = '/?' + qs.toString();
+      }
+
+      if (evt && evt.preventDefault) evt.preventDefault();
+      // Небольшая задержка, чтобы fetch успел уйти до смены страницы (keepalive это и так гарантирует,
+      // но для надёжности на старых браузерах даём небольшой буфер).
+      window.location.href = url;
+      return false;
+    }
+
+    logLandingEvent('landing_view');
   </script>
 </body>
 </html>
