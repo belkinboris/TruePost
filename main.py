@@ -231,6 +231,9 @@ _ALLOWED_LANDING_EVENTS = {
     "web_register_opened",
     "register_success",
     "activation_1",
+    "first_post_generated",
+    "channel_connected",
+    "first_post_published",
 }
 
 

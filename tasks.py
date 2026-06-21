@@ -172,7 +172,7 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
                 except Exception as e:
                     logger.warning(f"auto-refill after publish: {e}")
 
-    return {"ok": True, "message": "Черновик создан", "post_id": pid, "tokens_used": tokens}
+    return {"ok": True, "message": "Черновик создан", "post_id": pid, "tokens_used": tokens, "text": text}
 
 
 async def publish_post(post_id: int) -> dict:

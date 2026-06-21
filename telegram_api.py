@@ -101,22 +101,22 @@ async def verify_channel(chat: str) -> tuple[bool, str]:
         return False, f"Не удалось найти канал: {desc}"
 
     admins = await _call("getChatAdministrators", {"chat_id": chat})
+    bot_name = "@" + (config.TELEGRAM_BOT_USERNAME or "Trpst_bot")
     if not admins.get("ok"):
         desc = admins.get("description", "")
         if "not enough rights" in desc.lower() or "forbidden" in desc.lower():
-            return False, "Бот не является администратором канала. Добавь @" + (config.TELEGRAM_BOT_USERNAME or "бота") + " как администратора."
+            return False, f"Бот пока не найден в канале. Проверьте, что вы добавили {bot_name} администратором канала."
         return False, f"Не удалось получить список администраторов: {desc}"
 
     bot_admin = next((a for a in admins["result"] if a["user"]["id"] == bot_id), None)
 
     if not bot_admin:
-        bot_name = "@" + (config.TELEGRAM_BOT_USERNAME or "бота")
-        return False, f"Бот {bot_name} не найден среди администраторов. Добавь его через Управление каналом → Администраторы."
+        return False, f"Похоже, добавлен не тот бот. Для публикации нужен {bot_name}."
 
     if bot_admin.get("status") == "creator":
         return True, "Канал подключён — бот является создателем ✓"
 
     if not bot_admin.get("can_post_messages", False):
-        return False, "Бот добавлен, но без права публиковать сообщения. Включи это право в настройках администратора."
+        return False, "Бот найден, но у него нет права публиковать сообщения. Дайте право «Публиковать сообщения»."
 
     return True, "Канал подключён — бот является администратором ✓"
