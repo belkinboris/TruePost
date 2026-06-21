@@ -4,11 +4,34 @@ Telegram Bot API через httpx.
 """
 
 import logging
+import re
 import httpx
 import config
 
 logger = logging.getLogger(__name__)
 API = "https://api.telegram.org/bot{token}/{method}"
+
+
+def _normalize_chat(chat: str) -> str:
+    """
+    Приводит любой формат идентификатора канала к виду, который понимает
+    Telegram Bot API: @username или числовой chat_id.
+
+    Принимает: https://t.me/name, t.me/name, @name, name, -1001234567890.
+    Это нужно делать ВСЕГДА перед любым вызовом Bot API (sendMessage,
+    getChat, getChatAdministrators) -- нельзя полагаться на то, что в БД
+    уже сохранён правильный формат, потому что пользователь может вставить
+    полную ссылку при подключении канала.
+    """
+    chat = (chat or "").strip()
+    if not chat:
+        return chat
+    m = re.search(r"t\.me/([A-Za-z0-9_]+)", chat)
+    if m:
+        return "@" + m.group(1)
+    if chat.startswith("@") or chat.lstrip("-").isdigit():
+        return chat
+    return "@" + chat
 
 
 async def _call(method: str, payload: dict) -> dict:
@@ -22,7 +45,7 @@ async def _call(method: str, payload: dict) -> dict:
 
 async def send_message(chat: str, text: str) -> dict:
     return await _call("sendMessage", {
-        "chat_id": chat,
+        "chat_id": _normalize_chat(chat),
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": False,
@@ -61,14 +84,7 @@ async def send_notification(tg_chat_id: int, text: str) -> tuple[bool, str]:
 
 async def verify_channel(chat: str) -> tuple[bool, str]:
     """Проверяет что канал существует и бот является администратором."""
-    # Нормализуем username из ссылки
-    import re
-    chat = chat.strip()
-    m = re.search(r"t\.me/([A-Za-z0-9_]+)", chat)
-    if m:
-        chat = "@" + m.group(1)
-    if not chat.startswith("@") and not chat.lstrip("-").isdigit():
-        chat = "@" + chat
+    chat = _normalize_chat(chat)
 
     me = await _call("getMe", {})
     if not me.get("ok"):
