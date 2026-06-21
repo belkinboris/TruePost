@@ -6,6 +6,10 @@ class AuthIn(BaseModel):
     email: str
     password: str
     ref_code: str = ""
+    utm_source: str = ""
+    utm_medium: str = ""
+    utm_campaign: str = ""
+    lp_session: str = ""  # landing_session_id для CTA/Journey Diagnostics -- не сохраняется в User, только в LandingEvent
 
 
 class ChannelIn(BaseModel):
