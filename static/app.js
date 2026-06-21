@@ -27,6 +27,62 @@ function trackGoal(goal, params={}){
   }catch(_){}
 }
 
+// ── CTA/Journey Diagnostics: захват lp_session + UTM из URL лендинга (Part 4) ──
+function captureLandingSession(){
+  try{
+    // 1. Telegram Mini App: ?startapp=lp_<id> приходит как start_param, не как обычный query-параметр
+    const tg=window.Telegram?.WebApp;
+    const startParam=tg?.initDataUnsafe?.start_param || new URLSearchParams(window.location.search).get("tgWebAppStartParam");
+    if(startParam && startParam.startsWith("lp_")){
+      const sessionId=startParam.slice(3);
+      localStorage.setItem("ap_lp_session",sessionId);
+      // Это открытие Mini App из лендинга, а не серверный /start у бота —
+      // событие отражает именно это (см. diagnostic_notes на backend).
+      logLandingEventWeb("bot_start_from_landing");
+      logLandingEventWeb("web_register_opened");
+      return;
+    }
+
+    // 2. Обычный веб-переход: /?lp_session=<id>&utm_...
+    const params=new URLSearchParams(window.location.search);
+    const lpSession=params.get("lp_session");
+    if(lpSession){
+      localStorage.setItem("ap_lp_session",lpSession);
+      const utm={
+        utm_source:params.get("utm_source")||"",
+        utm_medium:params.get("utm_medium")||"",
+        utm_campaign:params.get("utm_campaign")||"",
+      };
+      if(utm.utm_source||utm.utm_medium||utm.utm_campaign){
+        localStorage.setItem("ap_lp_utm",JSON.stringify(utm));
+      }
+      logLandingEventWeb("web_register_opened");
+    }
+  }catch(_){}
+}
+
+function logLandingEventWeb(eventName){
+  try{
+    const sessionId=localStorage.getItem("ap_lp_session");
+    if(!sessionId) return; // не из лендинга — не логируем, не нужный шум
+    const utm=JSON.parse(localStorage.getItem("ap_lp_utm")||"{}");
+    fetch("/api/landing-event",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        session_id:sessionId,
+        event:eventName,
+        url:window.location.href,
+        utm_source:utm.utm_source||"",
+        utm_medium:utm.utm_medium||"",
+        utm_campaign:utm.utm_campaign||"",
+        user_agent:navigator.userAgent||"",
+      }),
+      keepalive:true,
+    }).catch(()=>{});
+  }catch(_){}
+}
+
 function cleanPostText(text){
   if(!text) return "";
   let t=text.trim();
@@ -115,11 +171,24 @@ function renderAuth(mode="login"){
     if(!email||!password) return toast("Заполните email и пароль","err");
     const body={email,password};
     if(mode==="register"&&$("ref")&&$("ref").value.trim()) body.ref_code=$("ref").value.trim();
+    if(mode==="register"){
+      try{
+        const lpSession=localStorage.getItem("ap_lp_session");
+        if(lpSession){
+          body.lp_session=lpSession;
+          const utm=JSON.parse(localStorage.getItem("ap_lp_utm")||"{}");
+          if(utm.utm_source) body.utm_source=utm.utm_source;
+          if(utm.utm_medium) body.utm_medium=utm.utm_medium;
+          if(utm.utm_campaign) body.utm_campaign=utm.utm_campaign;
+        }
+      }catch(_){}
+    }
     try{
       const isRegister = mode === "register";
       const r=await api("POST",isRegister?"/register":"/login",body);
       App.token=r.token;localStorage.setItem("ap_token",r.token);
       trackGoal(isRegister?"register_success":"login_success");
+      if(isRegister) logLandingEventWeb("register_success");
       await boot();
     }catch(e){
       let msg=e.message||"Что-то пошло не так";
@@ -1443,6 +1512,7 @@ function initTelegram(){
 
 async function boot(){
   initTelegram();
+  captureLandingSession();
   try{App.cfg=await api("GET","/config");}catch(_){App.cfg={packages:[]};}
   initCookieBanner();initKeyboardDismiss();
   if(!App.token) return renderAuth();
