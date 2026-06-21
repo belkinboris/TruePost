@@ -64,24 +64,74 @@ async def landing_funnel_diagnostics(
     period_start = now_naive - timedelta(hours=period_hours)
 
     with database.session() as s:
-        counts = {}
+        raw_counts = {}
+        unique_counts = {}
         for step in _FUNNEL_STEPS:
-            counts[step] = s.exec(
+            # raw — сырое количество строк, включая возможные дубли отправки
+            # (например, повторный fetch при flaky-сети или re-render).
+            raw_counts[step] = s.exec(
                 select(func.count(LandingEvent.id)).where(
                     LandingEvent.created_at >= period_start,
                     LandingEvent.event == step,
                 )
             ).one()
 
-    dropoff_summary = [{"step": step, "count": counts[step]} for step in _FUNNEL_STEPS]
+            # unique — реальная воронка: считаем уникальных людей/сессий, не строки.
+            # register_success: уникальные user_id, если они проставлены (backend
+            # всегда проставляет user_id при записи), иначе уникальные session_id
+            # как fallback для старых/ручных событий без user_id.
+            if step == "register_success":
+                unique_counts[step] = s.exec(
+                    select(func.count(func.distinct(LandingEvent.user_id))).where(
+                        LandingEvent.created_at >= period_start,
+                        LandingEvent.event == step,
+                        LandingEvent.user_id.is_not(None),
+                    )
+                ).one()
+                # Добор событий без user_id (не должно происходить из backend,
+                # но подстраховка на случай ручных/будущих вызовов через
+                # /api/landing-event без user_id) — считаем их по session_id,
+                # чтобы не терять сигнал, но не задвоить с уже посчитанными user_id.
+                no_user_id_sessions = s.exec(
+                    select(func.count(func.distinct(LandingEvent.session_id))).where(
+                        LandingEvent.created_at >= period_start,
+                        LandingEvent.event == step,
+                        LandingEvent.user_id.is_(None),
+                    )
+                ).one()
+                unique_counts[step] += no_user_id_sessions
+            else:
+                # Остальные шаги — считаем уникальные session_id за период.
+                unique_counts[step] = s.exec(
+                    select(func.count(func.distinct(LandingEvent.session_id))).where(
+                        LandingEvent.created_at >= period_start,
+                        LandingEvent.event == step,
+                    )
+                ).one()
+
+    dropoff_summary = [
+        {"step": step, "count": unique_counts[step], "raw_count": raw_counts[step]}
+        for step in _FUNNEL_STEPS
+    ]
 
     notes = []
-    views = counts["landing_view"]
-    bot_clicks = counts["cta_hero_bot_click"]
-    app_clicks = counts["cta_hero_app_click"]
-    bot_starts = counts["bot_start_from_landing"]
-    web_opened = counts["web_register_opened"]
-    registers = counts["register_success"]
+    views = unique_counts["landing_view"]
+    bot_clicks = unique_counts["cta_hero_bot_click"]
+    app_clicks = unique_counts["cta_hero_app_click"]
+    bot_starts = unique_counts["bot_start_from_landing"]
+    web_opened = unique_counts["web_register_opened"]
+    registers = unique_counts["register_success"]
+
+    # Если raw сильно расходится с unique — отдельная заметка про дубли,
+    # это полезно знать прежде чем доверять воронке.
+    for step in _FUNNEL_STEPS:
+        if raw_counts[step] > unique_counts[step] * 1.5 and raw_counts[step] >= 4:
+            notes.append(
+                f"'{step}': raw_count={raw_counts[step]} заметно выше unique count="
+                f"{unique_counts[step]} — событие отправляется повторно чаще чем "
+                f"ожидается (re-render, повторный fetch и т.п.). Funnel считается по "
+                f"unique, но стоит проверить источник дублей на фронте."
+            )
 
     if views == 0:
         notes.append("Нет данных о просмотрах лендинга за период — диагностика невозможна, либо событие landing_view не долетает.")
@@ -115,20 +165,29 @@ async def landing_funnel_diagnostics(
         if web_opened > 0 and registers == 0:
             notes.append("Пользователи идут в web, но не завершают регистрацию. Вероятная проблема — web registration flow.")
         if registers > 0:
-            notes.append(f"register_success зафиксирован {registers} раз(а) с атрибуцией к лендингу — путь работает хотя бы частично.")
+            notes.append(f"register_success зафиксирован {registers} раз(а) (уникальных пользователей) с атрибуцией к лендингу — путь работает хотя бы частично.")
 
     return {
         "period_hours": period_hours,
         "as_of": now_aware.isoformat().replace("+00:00", "Z"),
         "landing_views": views,
+        "landing_views_raw": raw_counts["landing_view"],
         "cta_hero_bot_clicks": bot_clicks,
+        "cta_hero_bot_clicks_raw": raw_counts["cta_hero_bot_click"],
         "cta_hero_app_clicks": app_clicks,
-        "cta_header_clicks": counts["cta_header_click"],
-        "cta_final_clicks": counts["cta_final_click"],
+        "cta_hero_app_clicks_raw": raw_counts["cta_hero_app_click"],
+        "cta_header_clicks": unique_counts["cta_header_click"],
+        "cta_header_clicks_raw": raw_counts["cta_header_click"],
+        "cta_final_clicks": unique_counts["cta_final_click"],
+        "cta_final_clicks_raw": raw_counts["cta_final_click"],
         "bot_starts_from_landing": bot_starts,
+        "bot_starts_from_landing_raw": raw_counts["bot_start_from_landing"],
         "web_register_opened": web_opened,
+        "web_register_opened_raw": raw_counts["web_register_opened"],
         "register_success": registers,
-        "activation_1": counts["activation_1"],
+        "register_success_raw": raw_counts["register_success"],
+        "activation_1": unique_counts["activation_1"],
+        "activation_1_raw": raw_counts["activation_1"],
         "dropoff_summary": dropoff_summary,
         "diagnostic_notes": notes,
     }
