@@ -159,7 +159,8 @@ async function go(view,channelId){
   App.view=view;
   if(channelId!==undefined) App.channelId=channelId;
   if(view==="dashboard") return renderDashboard();
-  if(view==="new_channel") return renderNewChannel();
+  if(view==="new_channel") return renderQuickStart();
+  if(view==="connect_channel") return renderConnectChannel();
   if(view==="channel") return renderChannel();
   if(view==="billing") return renderBilling();
 }
@@ -276,19 +277,16 @@ function _nextTimeLabel(c){
 
 async function renderDashboard(){
   await refreshUser();
+  let chans=[];
+  try{chans=await api("GET","/channels");}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
+  if(!chans.length){
+    return renderQuickStart(); // новый пользователь — сразу к первому посту, без пустого дашборда
+  }
   $("app").innerHTML=topbar()+`<div class="wrap">
     <div class="page-head"><h1>Твои каналы</h1><p>ИИ пишет посты сам — тебе только выбирать лучший.</p></div>
     <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
     <div id="dash_footer"></div></div>`;
   const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
-  let chans=[];
-  try{chans=await api("GET","/channels");}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
-  if(!chans.length){
-    $("chans").innerHTML=`<div class="add-card" onclick="go('new_channel')" style="grid-column:1/-1;max-width:320px">
-      <div class="plus">+</div><div style="font-weight:500">Добавить первый канал</div>
-      <div style="font-size:13px;color:var(--text-faint);margin-top:4px">Займёт 2 минуты</div></div>`;
-    return;
-  }
   $("chans").innerHTML=chans.map(c=>{
     const verified=c.verified?`<span class="chip chip-green">● подключён</span>`:`<span class="chip chip-orange">● не проверен</span>`;
     return `<div class="chan-card" onclick="go('channel',${c.id})">
@@ -303,9 +301,206 @@ async function renderDashboard(){
     <div style="font-size:14px;font-weight:500">Новый канал</div></div>`;
 }
 
-// ONBOARDING
+// ONBOARDING — переменные используются старой полной формой (renderNewChannel),
+// доступной из вкладки "Расширенные" внутри уже созданного канала.
 let _ncType="thematic";
 let _ncVoice="author",_ncFormat="story",_ncEmoji="minimal",_ncCta=false,_ncCtaText="",_ncHz=12,_ncStyleProfile="";
+
+// QUICK START — минимальный онбординг: тема -> первый пост, без подключения канала
+function renderQuickStart(){
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <div class="page-head" style="text-align:center;margin-top:24px">
+      <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">О чём ваш канал?</h1>
+      <p style="color:var(--text-dim)">Опишите тему в двух словах — ИИ сразу напишет пост</p>
+    </div>
+    <div class="card">
+      <textarea id="qs_about" rows="3" placeholder="Например: канал про Roblox, юридический канал, салон красоты, новости компании" style="font-size:15px"></textarea>
+      <div class="hint" style="margin-top:8px"><b>Примеры:</b> M&A в России простым языком · Психология отношений · Криптоновости</div>
+    </div>
+    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+      onclick="qsGenerate()" id="qs_btn">✦ Сгенерировать первый пост</button>
+  </div>`;
+  setTimeout(()=>{const el=$("qs_about");if(el) el.focus();},100);
+}
+
+async function qsGenerate(){
+  const about=($("qs_about").value||"").trim();
+  if(!about) return toast("Опишите тему канала","err");
+  const btn=$("qs_btn");
+  btn.innerHTML='<span class="spinner"></span> Пишу пост…';btn.disabled=true;
+
+  // Заголовок канала — авто, из темы (первые слова), пользователь сможет
+  // переименовать позже в настройках. Не спрашиваем его сейчас намеренно —
+  // лишнее поле на первом экране снижает activation (см. задачу).
+  const title=about.length>40?about.slice(0,40).trim()+"…":about;
+
+  let chan;
+  try{
+    chan=await api("POST","/channels",{title,about});
+  }catch(e){
+    toast(e&&e.message?e.message:"Ошибка запроса","err");
+    btn.innerHTML="✦ Сгенерировать первый пост";btn.disabled=false;
+    return;
+  }
+  App.channelId=chan.id;
+
+  let post;
+  try{
+    post=await api("POST",`/channels/${chan.id}/generate`,{});
+    if(!post.text){
+      // Защита: для канала с дефолтным типом "thematic" это практически
+      // невозможно (skip бывает только у news-каналов), но на всякий случай
+      // не показываем пустой экран.
+      toast("Не получилось получить текст поста. Попробуй ещё раз.","err");
+      btn.innerHTML="✦ Сгенерировать первый пост";btn.disabled=false;
+      return;
+    }
+  }catch(e){
+    const errMsg=(e&&e.message)||"";
+    const human=errMsg.toLowerCase().includes("токен")||errMsg.toLowerCase().includes("баланс")
+      ? "Закончились пробные посты. Пополни баланс в разделе «Тарифы»."
+      : "Не удалось сгенерировать пост. Попробуй ещё раз.";
+    toast(human,"err");
+    btn.innerHTML="✦ Сгенерировать первый пост";btn.disabled=false;
+    return;
+  }
+
+  // activation_1: первый пост сгенерирован — ключевая метрика онбординга
+  trackGoal("first_post_generated",{channel_id:chan.id});
+  logLandingEventWeb("first_post_generated");
+
+  renderFirstPostResult(chan.id, post);
+}
+
+function renderFirstPostResult(channelId, post){
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <div class="page-head" style="text-align:center;margin-top:16px">
+      <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Готово ✦</h1>
+      <p style="color:var(--text-dim)">Вот первый пост для канала</p>
+    </div>
+    <div class="card" style="font-size:15px;line-height:1.7" id="fp_text">${renderTg(post.text)}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
+      <button class="btn-outline btn-sm" onclick="qsRegenerate(${channelId})" id="fp_regen_btn">↻ Сгенерировать ещё</button>
+      <button class="btn-outline btn-sm" onclick="qsEdit(${channelId},${post.post_id})">✎ Редактировать</button>
+    </div>
+    <button class="btn" style="width:100%;justify-content:center;margin-top:20px;padding:14px"
+      onclick="go('connect_channel',${channelId})">Подключить канал и опубликовать →</button>
+    <button class="btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:8px;color:var(--text-faint)"
+      onclick="go('dashboard')">Сохранить и вернуться позже</button>
+  </div>`;
+}
+
+async function qsRegenerate(channelId){
+  const btn=$("fp_regen_btn");
+  btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;
+  try{
+    const post=await api("POST",`/channels/${channelId}/generate`,{});
+    renderFirstPostResult(channelId, post);
+  }catch(e){
+    toast(e&&e.message?e.message:"Ошибка запроса","err");
+    btn.innerHTML="↻ Сгенерировать ещё";btn.disabled=false;
+  }
+}
+
+function qsEdit(channelId, postId){
+  // Редактирование первого поста — ведём в карточку канала, вкладка Очередь,
+  // там уже есть полноценный редактор поста. Не дублируем эту логику здесь.
+  go("channel", channelId);
+}
+
+// CONNECT CHANNEL — второй шаг онбординга: подключение publishing bot
+async function renderConnectChannel(){
+  let c;
+  try{c=await api("GET","/channels/"+App.channelId);}
+  catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");return go("dashboard");}
+  if(!$("app")) return;
+  App._chan=c;
+  const botUsername=App.cfg?.bot_username||"Trpst_bot";
+
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <div class="page-head" style="text-align:center;margin-top:16px">
+      <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Подключите Telegram-канал</h1>
+      <p style="color:var(--text-dim)">Чтобы АвтоПост мог публиковать посты, добавьте бота-публикатора администратором канала.</p>
+    </div>
+
+    <div class="card" style="text-align:center;padding:24px">
+      <div style="font-size:13px;color:var(--text-faint);margin-bottom:6px">Бот для публикации</div>
+      <div id="cc_bot_name" style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:600;color:var(--accent);margin-bottom:14px">@${esc(botUsername)}</div>
+      <button class="btn-outline btn-sm" onclick="ccCopyBot('${esc(botUsername)}')" id="cc_copy_btn">📋 Скопировать @${esc(botUsername)}</button>
+    </div>
+
+    <div class="hint" style="margin-top:14px;line-height:1.7">
+      1. Открой канал → Управление → Администраторы<br>
+      2. Добавь <b>@${esc(botUsername)}</b><br>
+      3. Включи право «Публиковать сообщения»
+    </div>
+
+    <label class="field mt"><span class="field-label">@username канала или ссылка t.me/</span>
+      <div class="row" style="gap:8px">
+        <input id="cc_chat" value="${esc(c.tg_chat||"")}" placeholder="@my_channel или https://t.me/channel" style="flex:1">
+      </div>
+    </label>
+    <div id="cc_msg" style="font-size:13px;margin-top:6px;min-height:18px"></div>
+
+    <button class="btn" style="width:100%;justify-content:center;margin-top:12px;padding:14px"
+      onclick="ccVerify()" id="cc_verify_btn">Я добавил, проверить</button>
+
+    <button class="btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:10px;color:var(--text-faint)"
+      onclick="go('channel',${c.id})">Подключу позже →</button>
+  </div>`;
+}
+
+function ccCopyBot(username){
+  const text="@"+username;
+  if(navigator.clipboard?.writeText){
+    navigator.clipboard.writeText(text).then(()=>toast("Скопировано","ok")).catch(()=>{});
+  }
+  const btn=$("cc_copy_btn");
+  if(btn){const orig=btn.textContent;btn.textContent="✓ Скопировано";setTimeout(()=>{btn.textContent=orig;},1500);}
+}
+
+async function ccVerify(){
+  const chat=($("cc_chat")||{value:""}).value.trim();
+  if(!chat) return toast("Введите @username или ссылку на канал","err");
+  const btn=$("cc_verify_btn"),msg=$("cc_msg");
+  btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;
+  try{
+    await api("PATCH","/channels/"+App.channelId,{tg_chat:chat});
+    const r=await api("POST","/channels/"+App.channelId+"/verify");
+    if(r.ok){
+      // activation_2: канал успешно подключён
+      trackGoal("channel_connected",{channel_id:App.channelId});
+      logLandingEventWeb("channel_connected");
+      toast("Канал подключён ✓","ok");
+      await ccPublishFirstPost();
+    } else {
+      if(msg){msg.textContent=r.message;msg.style.color="var(--red)";}
+      btn.innerHTML="Я добавил, проверить";btn.disabled=false;
+    }
+  }catch(e){
+    if(msg){msg.textContent=e.message||"Не удалось проверить канал";msg.style.color="var(--red)";}
+    btn.innerHTML="Я добавил, проверить";btn.disabled=false;
+  }
+}
+
+async function ccPublishFirstPost(){
+  // После подключения канала публикуем первый сгенерированный пост,
+  // который сейчас лежит в очереди со статусом pending.
+  try{
+    const posts=await api("GET",`/channels/${App.channelId}/posts`);
+    const pending=(posts||[]).find(p=>p.status==="pending"||p.status==="onboarding");
+    if(pending){
+      await api("POST",`/posts/${pending.id}/publish`);
+      // activation_3: первый пост реально опубликован в канал
+      trackGoal("first_post_published",{channel_id:App.channelId});
+      logLandingEventWeb("first_post_published");
+    }
+  }catch(e){
+    // Не блокируем переход даже если публикация не удалась —
+    // пользователь увидит статус поста в очереди и сможет опубликовать вручную.
+  }
+  go("channel",App.channelId);
+}
 
 function renderNewChannel(){
   _ncVoice="author";_ncFormat="story";_ncEmoji="minimal";_ncCta=false;_ncCtaText="";_ncHz=12;_ncStyleProfile="";
