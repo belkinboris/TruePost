@@ -310,22 +310,21 @@ let _ncVoice="author",_ncFormat="story",_ncEmoji="minimal",_ncCta=false,_ncCtaTe
 function renderQuickStart(){
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <div class="page-head" style="text-align:center;margin-top:24px">
-      <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">О чём ваш канал?</h1>
-      <p style="color:var(--text-dim)">Опишите тему в двух словах — ИИ сразу напишет пост</p>
+      <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">О чём сделать первый пост?</h1>
+      <p style="color:var(--text-dim)">Канал можно подключить позже — сначала покажем пример поста.</p>
     </div>
     <div class="card">
-      <textarea id="qs_about" rows="3" placeholder="Например: канал про Roblox, юридический канал, салон красоты, новости компании" style="font-size:15px"></textarea>
-      <div class="hint" style="margin-top:8px"><b>Примеры:</b> M&A в России простым языком · Психология отношений · Криптоновости</div>
+      <textarea id="qs_about" rows="3" placeholder="Например: M&A сделки в России, Roblox, салон красоты, криптоновости" style="font-size:15px"></textarea>
     </div>
     <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
-      onclick="qsGenerate()" id="qs_btn">✦ Сгенерировать первый пост</button>
+      onclick="qsGenerate()" id="qs_btn">Сгенерировать пост</button>
   </div>`;
   setTimeout(()=>{const el=$("qs_about");if(el) el.focus();},100);
 }
 
 async function qsGenerate(){
   const about=($("qs_about").value||"").trim();
-  if(!about) return toast("Опишите тему канала","err");
+  if(!about) return toast("Опишите тему","err");
   const btn=$("qs_btn");
   btn.innerHTML='<span class="spinner"></span> Пишу пост…';btn.disabled=true;
 
@@ -336,10 +335,14 @@ async function qsGenerate(){
 
   let chan;
   try{
-    chan=await api("POST","/channels",{title,about});
+    chan=await api("POST","/channels",{
+      title, about,
+      // Короче, чем дефолт — первый пост должен читаться за 10 секунд (см. задачу).
+      post_length:"700-1200 знаков, 2-4 коротких абзаца, простой заголовок",
+    });
   }catch(e){
     toast(e&&e.message?e.message:"Ошибка запроса","err");
-    btn.innerHTML="✦ Сгенерировать первый пост";btn.disabled=false;
+    btn.innerHTML="Сгенерировать пост";btn.disabled=false;
     return;
   }
   App.channelId=chan.id;
@@ -347,12 +350,14 @@ async function qsGenerate(){
   let post;
   try{
     post=await api("POST",`/channels/${chan.id}/generate`,{});
-    if(!post.text){
-      // Защита: для канала с дефолтным типом "thematic" это практически
-      // невозможно (skip бывает только у news-каналов), но на всякий случай
-      // не показываем пустой экран.
-      toast("Не получилось получить текст поста. Попробуй ещё раз.","err");
-      btn.innerHTML="✦ Сгенерировать первый пост";btn.disabled=false;
+    // Защитная сеть на фронте: backend уже делает fallback при отказе модели,
+    // но если что-то всё равно похоже на не-пост (короткий текст, латиница
+    // в начале, явный вопрос) — не показываем это пользователю как результат.
+    const looksWrong = !post.text || post.text.trim().length < 60
+      || /^(what|please|sorry|i\s|let me|could you)/i.test(post.text.trim());
+    if(looksWrong){
+      toast("Не получилось найти свежий факт по этой теме. Попробуйте уточнить тему — например: «новости M&A в России».","err");
+      btn.innerHTML="Сгенерировать пост";btn.disabled=false;
       return;
     }
   }catch(e){
@@ -361,7 +366,7 @@ async function qsGenerate(){
       ? "Закончились пробные посты. Пополни баланс в разделе «Тарифы»."
       : "Не удалось сгенерировать пост. Попробуй ещё раз.";
     toast(human,"err");
-    btn.innerHTML="✦ Сгенерировать первый пост";btn.disabled=false;
+    btn.innerHTML="Сгенерировать пост";btn.disabled=false;
     return;
   }
 
@@ -369,24 +374,31 @@ async function qsGenerate(){
   trackGoal("first_post_generated",{channel_id:chan.id});
   logLandingEventWeb("first_post_generated");
 
-  renderFirstPostResult(chan.id, post);
+  renderFirstPostResult(chan.id, post, about);
 }
 
-function renderFirstPostResult(channelId, post){
+function renderFirstPostResult(channelId, post, about){
+  App._qsAbout = about || App._qsAbout || ""; // помним тему для перегенерации
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <div class="page-head" style="text-align:center;margin-top:16px">
       <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Готово ✦</h1>
       <p style="color:var(--text-dim)">Вот первый пост для канала</p>
     </div>
     <div class="card" style="font-size:15px;line-height:1.7" id="fp_text">${renderTg(post.text)}</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:16px">
-      <button class="btn-outline btn-sm" onclick="qsRegenerate(${channelId})" id="fp_regen_btn">↻ Сгенерировать ещё</button>
-      <button class="btn-outline btn-sm" onclick="qsEdit(${channelId},${post.post_id})">✎ Редактировать</button>
+
+    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+      onclick="go('connect_channel',${channelId})">Подключить канал и опубликовать</button>
+
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;justify-content:center">
+      <button class="btn-outline btn-sm" onclick="qsRegenerate(${channelId})" id="fp_regen_btn">Ещё вариант</button>
+      <button class="btn-outline btn-sm" onclick="qsRewrite(${channelId},'короче')" id="fp_short_btn">Сократить</button>
+      <button class="btn-outline btn-sm" onclick="qsRewrite(${channelId},'живее')" id="fp_live_btn">Сделать живее</button>
     </div>
-    <button class="btn" style="width:100%;justify-content:center;margin-top:20px;padding:14px"
-      onclick="go('connect_channel',${channelId})">Подключить канал и опубликовать →</button>
-    <button class="btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:8px;color:var(--text-faint)"
-      onclick="go('dashboard')">Сохранить и вернуться позже</button>
+
+    <div style="display:flex;justify-content:space-between;margin-top:16px">
+      <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="qsEdit(${channelId},${post.post_id})">Изменить текст</button>
+      <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="go('dashboard')">Сохранить на потом</button>
+    </div>
   </div>`;
 }
 
@@ -398,7 +410,27 @@ async function qsRegenerate(channelId){
     renderFirstPostResult(channelId, post);
   }catch(e){
     toast(e&&e.message?e.message:"Ошибка запроса","err");
-    btn.innerHTML="↻ Сгенерировать ещё";btn.disabled=false;
+    btn.innerHTML="Ещё вариант";btn.disabled=false;
+  }
+}
+
+async function qsRewrite(channelId, mode){
+  // "Сократить"/"Сделать живее" — переиспользуем тот же /generate с уточнённой
+  // темой, без отдельного эндпоинта переписывания (см. задачу: не расширять
+  // функциональность). Это не идеальная правка существующего текста, а новая
+  // генерация с явной инструкцией по стилю — для onboarding этого достаточно.
+  const btnId = mode==="короче" ? "fp_short_btn" : "fp_live_btn";
+  const btn=$(btnId);
+  if(btn){btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;}
+  const hint = mode==="короче"
+    ? `${App._qsAbout}. Сделай короче и проще — максимум 2 коротких абзаца.`
+    : `${App._qsAbout}. Сделай живее и разговорнее, добавь конкретную деталь.`;
+  try{
+    const post=await api("POST",`/channels/${channelId}/generate`,{topic:hint});
+    renderFirstPostResult(channelId, post);
+  }catch(e){
+    toast(e&&e.message?e.message:"Ошибка запроса","err");
+    if(btn){btn.innerHTML=mode==="короче"?"Сократить":"Сделать живее";btn.disabled=false;}
   }
 }
 
@@ -463,7 +495,14 @@ async function ccVerify(){
   const chat=($("cc_chat")||{value:""}).value.trim();
   if(!chat) return toast("Введите @username или ссылку на канал","err");
   const btn=$("cc_verify_btn"),msg=$("cc_msg");
-  btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;
+  btn.innerHTML='<span class="spinner"></span> Проверяем канал…';btn.disabled=true;
+  if(msg){msg.textContent="";}
+
+  // Если процесс идёт дольше 12 секунд — объясняем, не оставляем вечный spinner.
+  const slowTimer=setTimeout(()=>{
+    if(msg) msg.innerHTML='<span style="color:var(--text-faint)">Публикация занимает больше времени обычного. Можно подождать или вернуться позже.</span>';
+  },12000);
+
   try{
     await api("PATCH","/channels/"+App.channelId,{tg_chat:chat});
     const r=await api("POST","/channels/"+App.channelId+"/verify");
@@ -471,26 +510,33 @@ async function ccVerify(){
       // activation_2: канал успешно подключён
       trackGoal("channel_connected",{channel_id:App.channelId});
       logLandingEventWeb("channel_connected");
-      toast("Канал подключён ✓","ok");
-      await ccPublishFirstPost();
+      btn.innerHTML='<span class="spinner"></span> Публикуем первый пост…';
+      if(msg) msg.textContent="";
+      await ccPublishFirstPost(chat);
     } else {
+      clearTimeout(slowTimer);
       if(msg){msg.textContent=r.message;msg.style.color="var(--red)";}
       btn.innerHTML="Я добавил, проверить";btn.disabled=false;
     }
   }catch(e){
+    clearTimeout(slowTimer);
     if(msg){msg.textContent=e.message||"Не удалось проверить канал";msg.style.color="var(--red)";}
     btn.innerHTML="Я добавил, проверить";btn.disabled=false;
+  }finally{
+    clearTimeout(slowTimer);
   }
 }
 
-async function ccPublishFirstPost(){
+async function ccPublishFirstPost(tgChat){
   // После подключения канала публикуем первый сгенерированный пост,
   // который сейчас лежит в очереди со статусом pending.
+  let publishedPostId=null;
   try{
     const posts=await api("GET",`/channels/${App.channelId}/posts`);
     const pending=(posts||[]).find(p=>p.status==="pending"||p.status==="onboarding");
     if(pending){
       await api("POST",`/posts/${pending.id}/publish`);
+      publishedPostId=pending.id;
       // activation_3: первый пост реально опубликован в канал
       trackGoal("first_post_published",{channel_id:App.channelId});
       logLandingEventWeb("first_post_published");
@@ -499,7 +545,27 @@ async function ccPublishFirstPost(){
     // Не блокируем переход даже если публикация не удалась —
     // пользователь увидит статус поста в очереди и сможет опубликовать вручную.
   }
-  go("channel",App.channelId);
+  renderPublishSuccess(App.channelId, tgChat, publishedPostId);
+}
+
+function renderPublishSuccess(channelId, tgChat, postId){
+  const chatLabel = (tgChat||"").replace(/^https?:\/\/t\.me\//,"@").replace(/^@?/,"@");
+  const tgUrl = postId
+    ? `https://t.me/${chatLabel.replace(/^@/,"")}`
+    : `https://t.me/${chatLabel.replace(/^@/,"")}`;
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <div class="page-head" style="text-align:center;margin-top:32px">
+      <div style="font-size:40px;margin-bottom:8px">✅</div>
+      <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Готово — пост опубликован</h1>
+      <p style="color:var(--text-dim)">Первый пост опубликован в канале ${esc(chatLabel)}</p>
+    </div>
+    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+      onclick="window.open('${tgUrl}','_blank')">Открыть пост в Telegram</button>
+    <button class="btn-outline btn-sm" style="width:100%;justify-content:center;margin-top:10px"
+      onclick="go('new_channel')">Создать следующий пост</button>
+    <button class="btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:8px;color:var(--text-faint)"
+      onclick="go('channel',${channelId})">Перейти в очередь</button>
+  </div>`;
 }
 
 function renderNewChannel(){
@@ -919,53 +985,79 @@ function toggleExpand(id){
 }
 
 function renderPostCard(p, pubMs, channelEnabled){
-  const when=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
   const editable=p.status==="pending"||p.status==="onboarding";
   const sched=p.status==="scheduled";
-  const sc={
-    pending:`<span class="chip chip-orange">на проверке</span>`,
-    scheduled:`<span class="chip chip-blue">запланирован</span>`,
-    published:`<span class="chip chip-green">опубликован</span>`,
-    rejected:`<span class="chip chip-gray">удалён</span>`,
-    onboarding:`<span class="chip chip-blue">онбординг</span>`,
-  };
-  // Время публикации — показываем если канал активен и есть auto_publish или scheduled
-  let schedInfo="";
-  if(pubMs && (editable||sched)){
+  const isPaused=channelEnabled===false;
+
+  // ── Один главный визуальный индикатор статуса (task item 7) ──────────
+  // Не текстовый чип "на проверке" / "запланирован", а заметный pill,
+  // который меняет смысл по статусу: таймер для scheduled, "ждёт
+  // подтверждения" для pending, "ошибка" для failed, "опубликован" для published.
+  let statusPill="";
+  if(p.status==="published"){
+    const ts=p.published_at?new Date(p.published_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
+    statusPill=`<div class="status-pill status-pill-green">✅ Опубликован${ts?" · "+ts:""}</div>`;
+  } else if(p.status==="failed"){
+    // Заготовка под статус "ошибка публикации" — сейчас backend не
+    // устанавливает Post.status="failed" ни в одном сценарии (ошибки
+    // публикации сейчас остаются в статусе pending/scheduled с уведомлением
+    // через бота). Индикатор готов к моменту когда такой статус появится,
+    // без добавления нового статуса в БД прямо сейчас.
+    statusPill=`<div class="status-pill status-pill-red">⚠️ Ошибка публикации</div>`;
+  } else if(p.status==="rejected"){
+    statusPill=`<div class="status-pill status-pill-gray">Удалён</div>`;
+  } else if(isPaused){
+    statusPill=`<div class="status-pill status-pill-gray">⏸ На паузе</div>`;
+  } else if(sched && p.scheduled_at){
+    const sd=new Date(p.scheduled_at+"Z");const diff=sd-Date.now();
+    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
+    const ts=sd.toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+    const label=diff>0?(h>0?`Через ${h}ч ${m}м`:`Через ${m}мин`):"Скоро";
+    statusPill=`<div class="status-pill status-pill-blue">⏱ ${label} · ${ts}</div>`;
+  } else if(editable && pubMs && App._chan?.auto_publish){
     const diff=pubMs-Date.now();
+    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
     const ts=new Date(pubMs).toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-    const isPaused=channelEnabled===false;
-    if(isPaused){
-      schedInfo=`<div style="font-size:12px;color:var(--text-faint);margin-top:6px">⏸ Канал на паузе</div>`;
-    } else if(App._chan?.auto_publish){
-      const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
-      const label=diff>0?(h>0?`через ${h}ч ${m}м`:`через ${m}м`):"скоро";
-      schedInfo=`<div style="font-size:12px;color:var(--accent);margin-top:6px;font-weight:500">⏰ Публикуется ${label} · в ${ts}</div>`;
-    }
+    const label=diff>0?(h>0?`Через ${h}ч ${m}м`:`Через ${m}мин`):"Скоро";
+    statusPill=`<div class="status-pill status-pill-blue">⏱ ${label} · ${ts}</div>`;
+  } else if(editable){
+    statusPill=`<div class="status-pill status-pill-yellow">🟡 Ждёт вашего подтверждения</div>`;
   }
-  let actions="";
-  if(editable) actions=`
-    <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Опубликовать сейчас</button>
-    <button class="btn-outline btn-sm" onclick="showPicker(${p.id})">⏰ Запланировать</button>
-    <button class="btn-outline btn-sm" onclick="regenPost(${p.id})" id="regen_${p.id}">↻ Заново</button>
-    <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Удалить</button>`;
-  else if(sched) actions=`
-    <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Сейчас</button>
-    <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Снять</button>`;
-  else actions=`<button class="btn-ghost btn-sm" onclick="deletePost(${p.id})">Удалить</button>`;
+
+  const when=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+
+  // ── Кнопки: одна главная + одна вторичная, остальное в меню "..." (task item 8) ──
+  let primaryBtn="", secondaryBtn="", menuItems="";
+  if(editable){
+    primaryBtn=`<button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">Опубликовать сейчас</button>`;
+    secondaryBtn=`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
+    menuItems=`
+      <button class="menu-item" onclick="closePostMenu(${p.id});regenPost(${p.id})" id="regen_${p.id}">↻ Перегенерировать</button>
+      <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">⏰ Запланировать</button>
+      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>`;
+  } else if(sched){
+    primaryBtn=`<button class="btn-outline btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
+    secondaryBtn=`<button class="btn-ghost btn-sm" onclick="publishPost(${p.id})">Опубликовать сейчас</button>`;
+    menuItems=`<button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Снять с расписания</button>`;
+  } else {
+    menuItems=`<button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});deletePost(${p.id})">Удалить</button>`;
+  }
+  const menuBtn = menuItems ? `
+    <div style="position:relative;margin-left:auto">
+      <button class="btn-ghost btn-sm" onclick="togglePostMenu(${p.id})" style="padding:6px 10px">⋯</button>
+      <div id="pmenu_${p.id}" class="post-menu hidden">${menuItems}</div>
+    </div>` : "";
 
   return `<div class="post-card" id="pc_${p.id}">
-    <div class="post-header">
-      <div class="row" style="gap:8px;flex-wrap:wrap">${sc[p.status]||""}
-        <span class="text-faint mono" style="font-size:11px">${when}</span></div>
-      <span class="text-faint mono" style="font-size:11px">${fmt(p.tokens_used)} ток.</span>
+    ${statusPill}
+    <div class="post-header" style="margin-top:8px">
+      <span class="text-faint mono" style="font-size:11px">${when}</span>
     </div>
-    ${schedInfo}
     <div id="ppreview_${p.id}" style="position:relative">
       <div id="pb_${p.id}" class="post-body post-preview-short" style="margin-top:8px">${renderTg(p.text)}</div>
       <button id="pexp_${p.id}" class="expand-btn" onclick="toggleExpand(${p.id})">Читать полностью ↓</button>
     </div>
-    ${editable?`<textarea id="pt_${p.id}" class="post-body hidden" style="width:100%;min-height:120px;margin-top:8px">${esc(p.text)}</textarea>`:""}
+    ${(editable||sched)?`<textarea id="pt_${p.id}" class="post-body hidden" style="width:100%;min-height:120px;margin-top:8px">${esc(p.text)}</textarea>`:""}
     <div id="picker_${p.id}" class="hidden" style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border-soft)">
       <div class="field-label" style="margin-bottom:6px">Дата и время (UTC)</div>
       <div class="row" style="gap:8px">
@@ -974,12 +1066,30 @@ function renderPostCard(p, pubMs, channelEnabled){
         <button class="btn-ghost btn-sm" onclick="$('picker_${p.id}').classList.add('hidden')">✕</button>
       </div>
     </div>
-    <div class="post-actions" style="margin-top:10px">
-      ${editable?`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">✏️ Редактировать</button>
-        <button class="btn-ghost btn-sm hidden" id="save_${p.id}" onclick="savePost(${p.id})">💾 Сохранить</button>`:""}
-      ${actions}
+    <div class="post-actions" style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      ${primaryBtn}${secondaryBtn}
+      <button class="btn-ghost btn-sm hidden" id="save_${p.id}" onclick="savePost(${p.id})">💾 Сохранить</button>
+      ${menuBtn}
     </div></div>`;
 }
+
+function togglePostMenu(postId){
+  // Закрываем все остальные открытые меню перед открытием текущего.
+  document.querySelectorAll(".post-menu").forEach(el=>{
+    if(el.id!==`pmenu_${postId}`) el.classList.add("hidden");
+  });
+  const el=$(`pmenu_${postId}`);
+  if(el) el.classList.toggle("hidden");
+}
+function closePostMenu(postId){
+  const el=$(`pmenu_${postId}`);
+  if(el) el.classList.add("hidden");
+}
+document.addEventListener("click",e=>{
+  if(!e.target.closest(".post-menu") && !e.target.closest('[onclick^="togglePostMenu"]')){
+    document.querySelectorAll(".post-menu").forEach(el=>el.classList.add("hidden"));
+  }
+});
 
 async function renderQueue(){
   $("tabbody").innerHTML=`<div id="postList"><div class="text-faint" style="padding:20px">Загрузка…</div></div>`;
