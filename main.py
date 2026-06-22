@@ -25,7 +25,7 @@ import telegram_api
 import tasks
 from database import (
     init_db, session,
-    User, Channel, Source, Post, Payment, Referral, LandingEvent,
+    User, Channel, Source, Post, Payment, Referral, LandingEvent, IdempotencyKey,
 )
 from pydantic import BaseModel as _BaseModel
 from typing import Optional as _Opt
@@ -342,6 +342,22 @@ async def validate_topic(data: _TopicValidateIn, user: User = Depends(current_us
 @app.post("/api/channels")
 def create_channel(data: ChannelIn, user: User = Depends(current_user)):
     with session() as s:
+        # Идемпотентность quick start (task item E): если этот client_request_id
+        # уже обработан раньше (повторный клик после "Load failed", двойной
+        # сабмит формы) -- возвращаем уже созданный канал, не создаём новый.
+        if data.client_request_id:
+            existing_key = s.exec(
+                select(IdempotencyKey).where(
+                    IdempotencyKey.user_id == user.id,
+                    IdempotencyKey.client_request_id == data.client_request_id,
+                )
+            ).first()
+            if existing_key:
+                existing_channel = s.get(Channel, existing_key.channel_id)
+                if existing_channel:
+                    logger.info(f"create_channel: повторный client_request_id «{data.client_request_id}», возвращаю существующий канал {existing_channel.id}")
+                    return _channel_dict(existing_channel)
+
         ch = Channel(
             user_id=user.id,
             title=data.title,
@@ -367,6 +383,15 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
         s.add(ch)
         s.commit()
         s.refresh(ch)
+
+        if data.client_request_id:
+            s.add(IdempotencyKey(
+                user_id=user.id,
+                client_request_id=data.client_request_id,
+                channel_id=ch.id,
+            ))
+            s.commit()
+
         return _channel_dict(ch)
 
 
@@ -412,6 +437,11 @@ def delete_channel(channel_id: int, user: User = Depends(current_user)):
             s.delete(p)
         for r in s.exec(select(ChannelRule).where(ChannelRule.channel_id == channel_id)).all():
             s.delete(r)
+        # Чистим idempotency-ключи, указывающие на этот канал (task item E) —
+        # иначе повторный клик с тем же client_request_id попытается вернуть
+        # уже удалённый канал.
+        for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == channel_id)).all():
+            s.delete(k)
         s.delete(ch)
         s.commit()
     return {"ok": True}

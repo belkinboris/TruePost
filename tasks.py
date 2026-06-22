@@ -90,6 +90,9 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
                 ch = s.get(Channel, channel_id)
                 if ch:
                     logger.info(f"Канал {channel_id}: удаляю draft-канал из-за отклонённой темы ({classification})")
+                    from database import IdempotencyKey
+                    for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == channel_id)).all():
+                        s.delete(k)
                     s.delete(ch)
                     s.commit()
         return {

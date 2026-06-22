@@ -146,6 +146,25 @@ class LandingEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
+class IdempotencyKey(SQLModel, table=True):
+    """
+    Защита от дублей при quick start (task item E): клиент генерирует
+    client_request_id один раз на сессию онбординга, хранит в localStorage,
+    передаёт при создании канала. Если запрос с тем же ключом приходит
+    повторно (например после "Load failed" и повторного клика, или после
+    случайного двойного сабмита формы) -- возвращаем уже созданный канал,
+    а не создаём новый.
+
+    Новая отдельная таблица -- безопасно создаётся через create_all(), не
+    требует ALTER TABLE на существующих таблицах (Channel/User и т.д.).
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    client_request_id: str = Field(index=True)
+    channel_id: int
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 def init_db():
     SQLModel.metadata.create_all(engine)
 

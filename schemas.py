@@ -33,6 +33,7 @@ class ChannelIn(BaseModel):
     channel_type: str = "thematic"
     enabled: bool = True
     onboarded: bool = False
+    client_request_id: str = ""  # idempotency key для quick start (task item E)
 
 
 class ChannelPatch(BaseModel):
