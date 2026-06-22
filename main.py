@@ -345,6 +345,16 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
         # Идемпотентность quick start (task item E): если этот client_request_id
         # уже обработан раньше (повторный клик после "Load failed", двойной
         # сабмит формы) -- возвращаем уже созданный канал, не создаём новый.
+        #
+        # КРИТИЧНО (P0 fix): возвращаем существующий канал ТОЛЬКО если его
+        # about совпадает с текущим запросом. Если client_request_id совпал,
+        # но about отличается -- это значит ключ "протёк" из предыдущей
+        # quick-start сессии (stale App._qsRequestId на фронте, browser
+        # back-forward cache, или любая другая причина повторного
+        # использования ключа), а не настоящий повторный клик внутри одной
+        # генерации. В этом случае НЕЛЬЗЯ тихо вернуть канал со старой темой —
+        # лучше создать новый канал с правильной темой, чем дать пользователю
+        # пост про то, что он не вводил.
         if data.client_request_id:
             existing_key = s.exec(
                 select(IdempotencyKey).where(
@@ -354,9 +364,14 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
             ).first()
             if existing_key:
                 existing_channel = s.get(Channel, existing_key.channel_id)
-                if existing_channel:
-                    logger.info(f"create_channel: повторный client_request_id «{data.client_request_id}», возвращаю существующий канал {existing_channel.id}")
+                if existing_channel and existing_channel.about == data.about:
+                    logger.info(f"create_channel: повторный client_request_id «{data.client_request_id}», about совпадает, возвращаю существующий канал {existing_channel.id}")
                     return _channel_dict(existing_channel)
+                elif existing_channel:
+                    logger.warning(
+                        f"create_channel: client_request_id «{data.client_request_id}» совпал, но about отличается "
+                        f"(existing=«{existing_channel.about}» vs new=«{data.about}») -- stale request_id, создаю новый канал, НЕ возвращаю старый"
+                    )
 
         ch = Channel(
             user_id=user.id,
@@ -385,6 +400,17 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
         s.refresh(ch)
 
         if data.client_request_id:
+            # Если у этого client_request_id уже была другая запись (stale,
+            # about не совпал) -- не плодим дублирующиеся idempotency-записи
+            # на один ключ, перезаписываем на актуальный канал.
+            old_keys = s.exec(
+                select(IdempotencyKey).where(
+                    IdempotencyKey.user_id == user.id,
+                    IdempotencyKey.client_request_id == data.client_request_id,
+                )
+            ).all()
+            for k in old_keys:
+                s.delete(k)
             s.add(IdempotencyKey(
                 user_id=user.id,
                 client_request_id=data.client_request_id,
@@ -392,6 +418,7 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
             ))
             s.commit()
 
+        logger.info(f"[create_channel] создан channel_id={ch.id} title=«{ch.title}» about=«{ch.about}» client_request_id=«{data.client_request_id}»")
         return _channel_dict(ch)
 
 

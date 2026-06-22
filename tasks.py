@@ -58,6 +58,7 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
         if user.token_balance <= 0:
             return {"ok": False, "message": "Закончились токены. Пополните баланс."}
         channel_about = channel.about
+        channel_title = channel.title
         sources = s.exec(
             select(Source).where(Source.channel_id == channel_id, Source.enabled == True)  # noqa
         ).all()
@@ -65,6 +66,18 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
         # Загружаем правила канала
         rules = s.exec(select(ChannelRule).where(ChannelRule.channel_id == channel_id)).all()
         rules_text = "\n".join(f"• {r.rule_text}" for r in rules) if rules else ""
+
+    # Диагностическое логирование (task item 6, P0 stale-topic bug): полная
+    # видимость что реально пришло в эту генерацию -- channel_id, его title/
+    # about из БД прямо сейчас, и явный topic если передан. Это позволит
+    # увидеть на реальных логах Railway, доходит ли правильная тема до этой
+    # точки, или подмена происходит раньше (на фронте) либо позже (в самой
+    # generator.generate_post).
+    logger.info(
+        f"[generate_for_channel] channel_id={channel_id} channel.title=«{channel_title}» "
+        f"channel.about=«{channel_about}» explicit_topic=«{topic}» "
+        f"effective_topic_source={'explicit_topic' if topic else 'channel.about'}"
+    )
 
     # Topic validation (Parts 1-3 задачи): классифицируем тему ДО любых дорогих
     # операций (research, web_search). Тема для проверки — явный topic если
