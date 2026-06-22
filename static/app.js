@@ -208,9 +208,25 @@ function logout(){
   renderAuth();
 }
 
+// Task B rules 2-3: защищённые действия должны проверять auth до запроса
+// и показывать понятное сообщение, а не давать сырому 401 всплыть из api().
+// Используется как первая строка в обработчиках кнопок "Все каналы",
+// "Сгенерировать пост", "Подключить канал", "Опубликовать сейчас",
+// "Открыть настройки" и т.п.
+function requireAuth(){
+  if(App.token) return true;
+  toast("Сначала войдите или зарегистрируйтесь, чтобы продолжить.","err");
+  renderAuth();
+  return false;
+}
+
 async function refreshUser(){try{App.user=await api("GET","/me");}catch(_){}}
 
 async function go(view,channelId){
+  // Task B rule 2: все представления через go() — защищённые действия
+  // залогиненного пользователя. Проверяем один раз здесь, не дублируя в
+  // каждом отдельном обработчике (renderDashboard, renderQuickStart и т.д.).
+  if(!requireAuth()) return;
   App.view=view;
   if(channelId!==undefined) App.channelId=channelId;
   if(view==="dashboard") return renderDashboard();
@@ -267,11 +283,29 @@ function renderAuth(mode="login"){
       // после реального создания пользователя — фронт не дублирует это событие.
       await boot();
     }catch(e){
-      let msg=e.message||"Что-то пошло не так";
-      if(msg.includes("уже есть")) msg="Этот email уже зарегистрирован.";
-      else if(msg.includes("Неверный")||msg.includes("401")) msg="Неверный email или пароль.";
-      else if(msg.includes("6 символ")) msg="Пароль должен быть не менее 6 символов.";
-      else if(msg.includes("Failed to fetch")) msg="Нет соединения с сервером.";
+      // КРИТИЧНО (Task A fix): явная, предсказуемая классификация ошибки —
+      // не полагаемся на хрупкое совпадение подстрок типа "401" (могло
+      // случайно сработать не на том сообщении). api() уже гарантирует, что
+      // для /login и /register никогда не бросается "Сессия истекла" (это
+      // исключено на уровне api() для этих двух путей) — здесь только
+      // явные, ожидаемые варианты текста с backend и сети.
+      const raw = (e && e.message) || "";
+      let msg;
+      if (raw.includes("Failed to fetch") || raw.includes("NetworkError") || raw.includes("network")) {
+        msg = "Не удалось подключиться. Проверьте интернет и попробуйте ещё раз.";
+      } else if (raw.includes("уже есть") || raw.toLowerCase().includes("already")) {
+        msg = "Этот email уже зарегистрирован.";
+      } else if (raw.includes("Неверный email или пароль")) {
+        msg = "Неверный email или пароль.";
+      } else if (raw.includes("6 символ")) {
+        msg = "Пароль должен быть не менее 6 символов.";
+      } else if (raw) {
+        // Любой другой текст с backend — показываем как есть, не подменяем
+        // на дженерик и тем более не на "сессия истекла".
+        msg = raw;
+      } else {
+        msg = "Что-то пошло не так. Попробуйте ещё раз.";
+      }
       toast(msg,"err");
     }
   };
@@ -282,9 +316,14 @@ function renderAuth(mode="login"){
 // TOPBAR
 function topbar(backView,backLabel){
   const back=backView?`<div class="back-row"><button class="back-link" onclick="go('${backView}')">← ${backLabel||"назад"}</button></div>`:"";
-  const low=App.user&&App.user.token_balance<20000;
+  // Task D fix: не показываем "токены" пользователю и не считаем точное
+  // количество постов через жёсткое деление — это создавало неточный текст
+  // вида "осталось ~1 пост" при старом малом лимите. После увеличения
+  // бесплатной квоты до 200k порог пересчитан пропорционально (раньше был
+  // 20000 при квоте ~111000, те же ~18% от квоты).
+  const low=App.user&&App.user.token_balance<36000;
   const lowBanner=low?`<div style="background:#fef3c7;border-bottom:1px solid #f59e0b;padding:8px 20px;font-size:13px;text-align:center;color:#92400e">
-    ⚠️ Токены заканчиваются — осталось ~1 пост.
+    ⚠️ Баланс заканчивается.
     <a onclick="go('billing')" style="color:#92400e;font-weight:600;cursor:pointer;text-decoration:underline">Пополнить →</a></div>`:"";
   return `<div class="topbar">
     <a class="brand" onclick="go('dashboard')"><span class="brand-name">Авто<span>пост</span></span></a>
@@ -342,9 +381,41 @@ async function renderDashboard(){
   console.log(`[timing] refreshUser() в renderDashboard: ${(performance.now()-tUserStart).toFixed(0)}ms`);
 
   let chans=[];
+  let channelsLoadFailed=false;
   const tChansStart = performance.now();
-  try{chans=await api("GET","/channels");}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
+  try{
+    chans=await api("GET","/channels");
+  }catch(e){
+    channelsLoadFailed=true;
+    const msg=(e&&e.message)||"";
+    const isAuthFailure = msg.includes("Сессия истекла") || msg.includes("Не авторизован") || msg.includes("Пользователь не найден");
+    if(isAuthFailure){
+      // КРИТИЧНО (Task B fix): api() уже вызвал logout() сам для этого
+      // случая — здесь просто показываем экран входа и ВЫХОДИМ, не
+      // продолжаем выполнение. Раньше этот catch проглатывал ошибку молча,
+      // chans оставался пустым массивом, и код ниже интерпретировал это
+      // как "новый пользователь без каналов" -> показывал quick start.
+      // Реальная причина — истёкшая сессия, не отсутствие каналов. Это и
+      // была причина "quick start появляется неожиданно" + "не авторизован
+      // до hard reload": пользователь оказывался на quick start с мёртвым
+      // токеном, и любое защищённое действие там падало с 401 заново.
+      return renderAuth();
+    }
+    // Не auth-ошибка (сеть, временный сбой backend) — показываем тост,
+    // но НЕ показываем quick start как будто пользователь новый.
+    toast(msg||"Ошибка запроса","err");
+  }
   console.log(`[timing] /channels: ${(performance.now()-tChansStart).toFixed(0)}ms, count=${chans.length}`);
+
+  if(channelsLoadFailed){
+    // Сеть/временный сбой — даём пользователю явный повтор, не выдаём
+    // молчаливый quick start или пустой дашборд.
+    $("app").innerHTML = `<div class="wrap" style="max-width:480px;text-align:center;margin-top:60px">
+      <p style="color:var(--text-dim)">Не удалось загрузить список каналов.</p>
+      <button class="btn" style="margin-top:12px" onclick="go('dashboard')">Попробовать снова</button>
+    </div>`;
+    return;
+  }
 
   if(!chans.length){
     return renderQuickStart(); // новый пользователь — сразу к первому посту, без пустого дашборда
@@ -406,6 +477,7 @@ function renderQuickStart(){
 let _qsGenerateInFlight = false;
 
 async function qsGenerate(){
+  if(!requireAuth()) return;
   // КРИТИЧНО (P0 fix): защита от двойного клика через явный флаг, не только
   // через btn.disabled. disabled выставляется синхронно в начале функции,
   // но между двумя очень быстрыми кликами браузер может не успеть
@@ -447,6 +519,31 @@ async function _qsGenerateImpl(about){
     return;
   }
   if(!validation.ok){
+    if(validation.is_clarification){
+      // Task E: уточняющий вопрос, не ошибка — спокойный, не алармистский UI.
+      // Пользователь может согласиться продолжить с безопасной формулировкой
+      // той же темы, не теряя то что уже ввёл.
+      btn.innerHTML="Сгенерировать пост";btn.disabled=false;
+      const qsCard=document.querySelector('#qs_about')?.closest('.card');
+      if(qsCard){
+        let clarifyBox=document.getElementById('qs_clarify');
+        if(!clarifyBox){
+          clarifyBox=document.createElement('div');
+          clarifyBox.id='qs_clarify';
+          clarifyBox.style.marginTop='10px';
+          clarifyBox.style.padding='12px';
+          clarifyBox.style.background='var(--surface2)';
+          clarifyBox.style.borderRadius='10px';
+          clarifyBox.style.fontSize='14px';
+          qsCard.after(clarifyBox);
+        }
+        clarifyBox.innerHTML=`<div style="margin-bottom:8px">${esc(validation.message)}</div>
+          <button class="btn-sm btn" onclick="document.getElementById('qs_about').value='Образовательный пост про уверенность, коммуникацию и уважение в интимных отношениях: '+document.getElementById('qs_about').value;document.getElementById('qs_clarify').remove();qsGenerate();">Да, такой формат подходит</button>`;
+      } else {
+        toast(validation.message,"err");
+      }
+      return;
+    }
     toast(validation.message||"Не понял тему. Напишите проще.","err");
     btn.innerHTML="Сгенерировать пост";btn.disabled=false;
     return;
@@ -662,6 +759,7 @@ function withTimeout(promise, timeoutMs, timeoutMessage){
 }
 
 async function ccVerify(){
+  if(!requireAuth()) return;
   const chatRaw=($("cc_chat")||{value:""}).value.trim();
   if(!chatRaw) return toast("Введите @username или ссылку на канал","err");
   const btn=$("cc_verify_btn"),msg=$("cc_msg");
@@ -766,6 +864,7 @@ async function pollPostStatus(postId, maxWaitMs=20000, intervalMs=2000){
 }
 
 async function ccConfirmPublish(channelId, postId, tgChat){
+  if(!requireAuth()) return;
   if(!postId) return;
   const btn=$("cpc_publish_btn");
   btn.innerHTML='<span class="spinner"></span> Публикуем…';btn.disabled=true;
@@ -797,7 +896,7 @@ async function ccConfirmPublish(channelId, postId, tgChat){
       trackGoal("first_post_publish_success",{channel_id:channelId,post_id:postId,reconciled_after_timeout:true});
       trackGoal("first_post_published",{channel_id:channelId});
       logLandingEventWeb("first_post_published");
-      renderPublishSuccess(channelId, tgChat, postId);
+      await renderPublishSuccess(channelId, tgChat, postId);
       return;
     }
     trackGoal("first_post_publish_failed",{channel_id:channelId,post_id:postId,reason:"timeout_unconfirmed"});
@@ -820,13 +919,27 @@ async function ccConfirmPublish(channelId, postId, tgChat){
   trackGoal("first_post_published",{channel_id:channelId});
   trackGoal("first_post_publish_success",{channel_id:channelId});
   logLandingEventWeb("first_post_published");
-  renderPublishSuccess(channelId, tgChat, postId);
+  await renderPublishSuccess(channelId, tgChat, postId);
 }
 
-function renderPublishSuccess(channelId, tgChat, postId){
+async function renderPublishSuccess(channelId, tgChat, postId){
   const chatLabel = (tgChat||"").replace(/^https?:\/\/t\.me\//i,"").replace(/^@/,"");
   const tgUrl = `https://t.me/${chatLabel}`;
   trackGoal("success_screen_shown",{channel_id:channelId});
+
+  // Task C rules 3-4: контекстная подсказка про очередь/автопубликацию.
+  // Не критично если не получится загрузить — экран всё равно покажется.
+  let contextLine = "";
+  try{
+    const chan = await api("GET", "/channels/"+channelId);
+    const posts = await api("GET", `/channels/${channelId}/posts`);
+    const pendingCount = (posts||[]).filter(p=>p.status==="pending"||p.status==="onboarding").length;
+    if(pendingCount > 0){
+      contextLine = `<p style="font-size:13px;color:var(--text-dim);margin-top:8px">В очереди уже есть посты, которые ждут вашего подтверждения.</p>`;
+    } else if(!chan.auto_publish){
+      contextLine = `<p style="font-size:13px;color:var(--text-dim);margin-top:8px">Новые посты будут ждать вашего подтверждения. Это можно изменить в настройках.</p>`;
+    }
+  }catch(_){}
 
   if(!$("app")) return;
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
@@ -834,13 +947,15 @@ function renderPublishSuccess(channelId, tgChat, postId){
       <div style="font-size:40px;margin-bottom:8px">✅</div>
       <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Готово — пост опубликован</h1>
       <p style="color:var(--text-dim)">Пост опубликован в канале @${esc(chatLabel)}</p>
+      ${contextLine}
     </div>
     <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
-      onclick="window.open('${tgUrl}','_blank')">Открыть пост в Telegram</button>
+      onclick="trackGoal('queue_opened',{channel_id:${channelId}});go('channel',${channelId})">Перейти в очередь</button>
     <button class="btn-outline btn-sm" style="width:100%;justify-content:center;margin-top:10px"
       onclick="go('new_channel')">Создать следующий пост</button>
-    <button class="btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:8px;color:var(--text-faint)"
-      onclick="trackGoal('queue_opened',{channel_id:${channelId}});go('channel',${channelId})">Перейти в очередь</button>
+    <div style="text-align:center;margin-top:14px">
+      <a onclick="window.open('${tgUrl}','_blank')" style="font-size:13px;color:var(--text-faint);cursor:pointer;text-decoration:underline">Открыть пост в Telegram</a>
+    </div>
   </div>`;
 }
 
@@ -1855,6 +1970,7 @@ function showVerifyInput(){
 }
 
 async function verifyChannel(){
+  if(!requireAuth()) return;
   const chat=($("f_chat")||{value:""}).value.trim();if(!chat) return toast("Введите @username или ссылку","err");
   const btn=$("verBtn");if(btn) btn.innerHTML='<span class="spinner"></span>';
   try{
@@ -2075,6 +2191,7 @@ async function savePost(id){
   catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
 }
 async function publishPost(id){
+  if(!requireAuth()) return;
   // P0 fix (third issue): если канал не подключён к Telegram, не пытаемся
   // публиковать вообще — показываем понятное сообщение вместо того чтобы
   // дать запросу дойти до Telegram API и упасть с технической ошибкой.
