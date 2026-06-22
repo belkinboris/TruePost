@@ -143,12 +143,44 @@ function toast(msg, kind="") {
 
 async function api(method, path, body) {
   const opts={method,headers:{}};
+  const hadToken = !!App.token;
   if (App.token) opts.headers["Authorization"]="Bearer "+App.token;
   if (body!==undefined){opts.headers["Content-Type"]="application/json";opts.body=JSON.stringify(body);}
   const res=await fetch("/api"+path,opts);
-  if (res.status===401){logout();throw new Error("Сессия истекла");}
+
   let data=null;
   try{data=await res.json();}catch(_){}
+
+  if (res.status===401){
+    // Debugging requirements (P0 task): логируем контекст 401 явно, чтобы
+    // на реальных логах/консоли можно было увидеть что произошло, вместо
+    // догадок. path/hadToken/server detail — минимум для диагностики.
+    console.log(`[auth] 401 from ${method} ${path}, hadToken=${hadToken}, server_detail=${JSON.stringify(data&&data.detail)}`);
+
+    // КРИТИЧНО (P0 fix): register/login НЕ отправляют токен и не должны
+    // попадать под "сессия истекла" вообще — это другая категория ошибки
+    // (например бэкенд недоступен, неверный путь, или временный сбой).
+    // Раньше любой 401 от ЛЮБОГО запроса (включая саму регистрацию) сразу
+    // звал logout() и показывал жёстко закодированный текст "Сессия истекла"
+    // ДО того как тело ответа даже читалось — это не давало пользователю
+    // увидеть реальную причину и блокировало первую попытку регистрации.
+    if (path === "/register" || path === "/login") {
+      throw new Error((data && data.detail) || "Не удалось войти. Попробуйте ещё раз.");
+    }
+
+    // Для остальных запросов 401 значит реально невалидный/истёкший токен —
+    // здесь оправдан logout() и чистый переход на экран входа, а не dead-end.
+    if (hadToken) {
+      logout();
+      throw new Error("Сессия истекла, войдите снова.");
+    }
+
+    // 401 без токена на защищённом эндпоинте — не должно происходить в
+    // обычном UI-потоке (кнопки защищённых действий не доступны без логина),
+    // но если как-то случилось — не зовём logout() на пустом месте.
+    throw new Error((data && data.detail) || "Нужно войти в аккаунт.");
+  }
+
   if(!res.ok){
     // КРИТИЧНО (P0 fix): data.detail от FastAPI не всегда строка. При 422
     // (ошибка валидации Pydantic) это список объектов вида
@@ -2189,9 +2221,36 @@ async function boot(){
     const tRouteStart = performance.now();
     await go("dashboard");
     console.log(`[timing] go('dashboard') incl. /channels + render: ${(performance.now()-tRouteStart).toFixed(0)}ms`);
-  }catch(_){
-    console.log(`[timing] /me failed after ${(performance.now()-tMeStart).toFixed(0)}ms`);
-    logout();
+  }catch(e){
+    console.log(`[timing] /me failed after ${(performance.now()-tMeStart).toFixed(0)}ms: ${e&&e.message}`);
+    // КРИТИЧНО (P0 fix, acceptance test C/D): logout() должен срабатывать
+    // ТОЛЬКО при реальной невалидности сессии (401 -- api() уже сам вызвал
+    // logout() в этом случае, внутри себя). Раньше ЛЮБАЯ ошибка /me —
+    // включая временный сбой сети, таймаут, или backend ещё не поднялся
+    // после деплоя/restart — тоже звала logout(), что СТИРАЛО валидный
+    // токен пользователя. Это и есть прямая причина "hard refresh ломает
+    // вход" и "после деплоя зарегистрироваться/войти не получается":
+    // временная недоступность backend интерпретировалась как "сессия
+    // истекла" и убивала токен, который на самом деле был совершенно рабочим.
+    const isAuthFailure = e && e.message && (
+      e.message.includes("Сессия истекла") ||
+      e.message.includes("Не авторизован") ||
+      e.message.includes("Пользователь не найден")
+    );
+    if (isAuthFailure) {
+      // api() уже вызвал logout() сам для этого случая — здесь просто
+      // показываем экран входа, не дублируем logout() второй раз.
+      renderAuth();
+    } else {
+      // Временная проблема (сеть, cold start backend после деплоя) — токен
+      // НЕ трогаем. Показываем мягкую ошибку с возможностью повторить,
+      // вместо того чтобы выкинуть пользователя на экран регистрации.
+      toast("Не удалось загрузить данные. Проверьте соединение и обновите страницу.", "err");
+      $("app").innerHTML = `<div class="wrap" style="max-width:480px;text-align:center;margin-top:60px">
+        <p style="color:var(--text-dim)">Не удалось подключиться к серверу.</p>
+        <button class="btn" style="margin-top:12px" onclick="boot()">Попробовать снова</button>
+      </div>`;
+    }
   }
   console.log(`[timing] boot() total: ${(performance.now()-t0).toFixed(0)}ms`);
 }
