@@ -257,9 +257,11 @@ function _intervalLabel(h){
   if(h<24) return `каждые ${h}ч`;
   return `каждые ${h/24|0}д`;
 }
-function _nextTimeLabel(c){
+function _nextGenerationLabel(c){
   if(c.enabled===false) return "на паузе";
-  // Время следующей публикации = последняя генерация + интервал, но не в прошлом
+  // Время следующей ГЕНЕРАЦИИ (не публикации!) = последняя генерация + интервал,
+  // но не в прошлом. Публикация — отдельное понятие, происходит либо по явному
+  // подтверждению пользователя, либо для scheduled-постов (см. renderPostCard).
   const intervalMs=(c.interval_hours||12)*3600000;
   const now=Date.now();
   let next;
@@ -295,7 +297,7 @@ async function renderDashboard(){
       <div class="chan-about">${esc(c.about)||"<span class='text-faint'>тема не задана</span>"}</div>
       <div class="chan-foot">${verified}
         <span class="chip chip-gray">🕑 ${_intervalLabel(c.interval_hours||12)}</span>
-        <span class="chip chip-blue">⏱ ${_nextTimeLabel(c)}</span>
+        <span class="chip chip-blue">⏱ ${_nextGenerationLabel(c)}</span>
       </div></div>`;
   }).join("")+`<div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
     <div style="font-size:14px;font-weight:500">Новый канал</div></div>`;
@@ -309,6 +311,13 @@ let _ncVoice="author",_ncFormat="story",_ncEmoji="minimal",_ncCta=false,_ncCtaTe
 // QUICK START — минимальный онбординг: тема -> первый пост, без подключения канала
 function renderQuickStart(){
   trackGoal("quick_start_viewed");
+  // Idempotency key (task item E): один на сессию quick start, генерируется
+  // при показе экрана. Переживает повторный клик после "Load failed" в
+  // рамках одной загрузки страницы — на полный reload генерируется новый,
+  // но это нормально: пользователь, начавший заново, осознанно начинает
+  // новую попытку, а не борется с зависшим запросом.
+  App._qsRequestId = "qs" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <button class="back-link" style="margin-top:12px" onclick="go('dashboard')">← Все каналы</button>
     <div class="page-head" style="text-align:center;margin-top:8px">
@@ -365,6 +374,9 @@ async function qsGenerate(){
       title, about,
       // Короче, чем дефолт — первый пост должен читаться за 10 секунд (см. задачу).
       post_length:"700-1200 знаков, 2-4 коротких абзаца, простой заголовок",
+      // Idempotency key (task item E): повторный клик с тем же ключом
+      // вернёт уже созданный канал, не создаст дубль.
+      client_request_id: App._qsRequestId || "",
     });
   }catch(e){
     toast(e&&e.message?e.message:"Ошибка запроса","err");
@@ -396,6 +408,17 @@ async function qsGenerate(){
     const errMsg=(e&&e.message)||"";
     const isTokenIssue=errMsg.toLowerCase().includes("токен")||errMsg.toLowerCase().includes("баланс");
     trackGoal("first_post_generation_failed",{channel_id:chan.id,reason:errMsg});
+
+    // Если тема была отклонена классификатором (defense-in-depth расхождение
+    // между validate-topic и generate_for_channel) — backend уже удалил
+    // канал сам (см. tasks.generate_for_channel). Для остальных технических
+    // сбоев (web_search не нашёл фактов, временная ошибка API и т.п.) канал
+    // остаётся пустым черновиком — удаляем его и здесь, чтобы не оставлять
+    // в dashboard непроверенные дубли без единого поста (task item E, п.4-5).
+    if(!isTokenIssue){
+      try{await api("DELETE","/channels/"+chan.id);}catch(_){}
+    }
+
     // Backend уже возвращает готовый русский текст для отклонённых тем
     // (unclear/adult/unsafe — см. tasks.generate_for_channel) и для других
     // ошибок генерации. Показываем его как есть, не подменяем дженериком —
@@ -1086,7 +1109,7 @@ async function renderChannel(){
             ${c.tg_chat?`<span class="chip chip-gray" style="font-family:monospace">${esc(c.tg_chat)}</span>`:""}
           </div>
           ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:8px;max-width:500px">${esc(c.about)}</p>`:""}
-          ${c.enabled?`<p style="font-size:13px;color:var(--blue);margin-top:6px;font-weight:500">⏱ Следующий пост ${_nextTimeLabel(c)}</p>`:""}
+          ${c.enabled?`<p style="font-size:13px;color:var(--blue);margin-top:6px;font-weight:500">⏱ Следующая генерация ${_nextGenerationLabel(c)}</p>`:""}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
@@ -1180,14 +1203,14 @@ function renderPostCard(p, pubMs, channelEnabled){
     const ts=sd.toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
     statusPill=`<div class="status-pill status-pill-blue" id="countdown_${p.id}" data-target-ms="${sd.getTime()}">⏱ ${countdown}</div>`;
     subLine=`<div class="status-subline">Опубликуется ${ts}</div>`;
-  } else if(editable && pubMs && App._chan?.auto_publish){
-    const diff=pubMs-Date.now();
-    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
-    const countdown=diff>0?(h>0?`через ${h}ч ${m}м`:`через ${m}мин`):"скоро";
-    const ts=new Date(pubMs).toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-    statusPill=`<div class="status-pill status-pill-blue" id="countdown_${p.id}" data-target-ms="${pubMs}">⏱ ${countdown}</div>`;
-    subLine=`<div class="status-subline">Опубликуется ${ts}</div>`;
   } else if(editable){
+    // КРИТИЧНО (фикс путаницы из задачи): pending-пост НИКОГДА не должен
+    // показывать синий countdown публикации, даже если у канала включена
+    // auto_publish. Синий countdown — это только для status="scheduled"
+    // (пост явно поставлен в расписание через "Запланировать"). Раньше здесь
+    // была ветка, которая путала "канал настроен на автопубликацию по
+    // расписанию" с "этот конкретный пост скоро опубликуется" — это и
+    // создавало конфликт "Ждёт подтверждения" + синий таймер одновременно.
     statusPill=`<div class="status-pill status-pill-yellow">Ждёт вашего подтверждения</div>`;
     const created=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
     subLine=`<div class="status-subline">Создан ${created}</div>`;
@@ -1203,9 +1226,9 @@ function renderPostCard(p, pubMs, channelEnabled){
     primaryBtn=`<button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">Опубликовать сейчас</button>`;
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     menuItems=`
-      <button class="menu-item" onclick="closePostMenu(${p.id});regenPost(${p.id})" id="regen_${p.id}">↻ Перегенерировать</button>
       <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">⏰ Запланировать</button>
-      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>`;
+      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>
+      <button class="menu-item" onclick="closePostMenu(${p.id});regenPost(${p.id})" id="regen_${p.id}">↻ Сгенерировать заново</button>`;
   } else if(sched){
     primaryBtn=`<button class="btn-outline btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="publishPost(${p.id})">Опубликовать сейчас</button>`;
@@ -1306,32 +1329,38 @@ async function renderQueue(){
 
   const pending=posts.filter(p=>p.status==="pending"||p.status==="onboarding"||p.status==="scheduled");
   const history=posts.filter(p=>p.status==="published"||p.status==="rejected");
-
-  // Вычисляем время публикации для каждого поста в очереди
   const c=App._chan;
-  const intervalMs=(c.interval_hours||12)*3600000;
-  // Базовая точка отсчёта: следующая публикация не может быть в прошлом
-  const lastPub=history.find(p=>p.status==="published");
-  const lastPubMs=lastPub?new Date(lastPub.published_at+"Z").getTime():0;
-  // Первый пост публикуется через интервал от последней публикации,
-  // но если это время уже прошло — отсчитываем от текущего момента
-  const now=Date.now();
-  let firstPubMs=lastPubMs?lastPubMs+intervalMs:now+intervalMs;
-  if(firstPubMs<now) firstPubMs=now+60000; // если просрочено — через минуту
 
-  let html="";
+  // Пояснительный блок про автопубликацию (task item D) — снимает путаницу
+  // между "пост ждёт подтверждения" и "пост скоро опубликуется сам".
+  const autoPublishInfo = c.auto_publish
+    ? `<div class="card" style="background:var(--blue-bg);border:none;margin-bottom:14px;padding:14px 16px">
+        <div style="font-size:13px;color:var(--blue);font-weight:600">Автопубликация включена</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Посты будут выходить по расписанию каждые ${_intervalLabel(c.interval_hours||12)}.</div>
+        <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--blue)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Изменить</button>
+      </div>`
+    : `<div class="card" style="background:var(--accent-soft);border:none;margin-bottom:14px;padding:14px 16px">
+        <div style="font-size:13px;color:var(--accent-dark);font-weight:600">Автопубликация выключена</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Посты ждут вашего подтверждения. Можно включить автопубликацию в настройках.</div>
+        <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--accent-dark)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Открыть настройки</button>
+      </div>`;
+
+  let html=autoPublishInfo;
   if(!pending.length){
     const paused = c && !c.enabled;
     html+=paused
       ? `<div class="empty"><div class="empty-icon">⏸</div><h3>Канал на паузе</h3><p>При возобновлении автоматически сгенерируются 3 поста.</p></div>`
       : `<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
   } else {
-    html+=pending.map((p,i)=>{
-      // Если пост запланирован вручную — берём его scheduled_at
-      // Иначе: первый публикуется в firstPubMs, каждый следующий +интервал
-      const pubMs=p.scheduled_at
-        ? new Date(p.scheduled_at+"Z").getTime()
-        : firstPubMs + i*intervalMs;
+    html+=pending.map((p)=>{
+      // КРИТИЧНО (фикс путаницы из задачи): pubMs передаём ТОЛЬКО для
+      // реально запланированных постов (p.scheduled_at стоит явно через
+      // "Запланировать"). Раньше здесь вычислялось спекулятивное время
+      // публикации для ЛЮБОГО pending-поста на основе интервала канала —
+      // это и создавало конфликт "Ждёт подтверждения" + синий таймер.
+      // Pending-пост не имеет реального времени публикации, пока пользователь
+      // явно не подтвердит или не запланирует его.
+      const pubMs=p.scheduled_at?new Date(p.scheduled_at+"Z").getTime():null;
       return renderPostCard(p, pubMs, c.enabled);
     }).join("");
   }
@@ -1402,10 +1431,10 @@ function renderSettings(){
         <div id="analyze_result"></div>
       </div>
     </div>
-    <div class="card">
+    <div class="card" id="settings_automation_card">
       <div class="card-title">Автоматизация</div>
       <div class="toggle-row">
-        <div class="toggle-info"><b>Публиковать без проверки</b><small>Посты уходят сразу.</small></div>
+        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию, без вашего подтверждения. Если выключено — каждый пост ждёт, пока вы нажмёте «Опубликовать сейчас».</small></div>
         <label class="switch"><input type="checkbox" id="sw_auto" ${c.auto_publish?"checked":""}><span class="slider"></span></label>
       </div>
       <div class="toggle-row">
