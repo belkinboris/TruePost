@@ -14,7 +14,7 @@ import uvicorn
 from fastapi import FastAPI, Depends, HTTPException, Request, Header, BackgroundTasks
 from fastapi.responses import PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
-from sqlmodel import select
+from sqlmodel import select, delete
 
 import config
 import security
@@ -981,22 +981,76 @@ async def yookassa_notify(request: Request):
 
 @app.delete("/api/me")
 def delete_account(user: User = Depends(current_user)):
-    with session() as s:
-        uid = user.id
-        s.exec(__import__('sqlmodel').delete(Post).where(Post.user_id == uid))
-        # Удаляем источники каналов пользователя
-        from sqlmodel import select as sel
-        chans = s.exec(sel(Channel).where(Channel.user_id == uid)).all()
-        for ch in chans:
-            s.exec(__import__('sqlmodel').delete(Source).where(Source.channel_id == ch.id))
-        s.exec(__import__('sqlmodel').delete(Channel).where(Channel.user_id == uid))
-        s.exec(__import__('sqlmodel').delete(Payment).where(Payment.user_id == uid))
-        s.exec(__import__('sqlmodel').delete(Referral).where(Referral.referrer_id == uid))
-        s.exec(__import__('sqlmodel').delete(Referral).where(Referral.referred_id == uid))
-        u = s.get(User, uid)
-        if u:
-            s.delete(u)
-        s.commit()
+    from database import ChannelRule
+    uid = user.id
+
+    try:
+        with session() as s:
+            chans = s.exec(select(Channel).where(Channel.user_id == uid)).all()
+            chan_ids = [c.id for c in chans]
+            logger.info(f"[delete_account] uid={uid} начинаю удаление, channels_count={len(chan_ids)}")
+
+            posts_count = 0
+            sources_count = 0
+            rules_count = 0
+            for ch in chans:
+                for p in s.exec(select(Post).where(Post.channel_id == ch.id)).all():
+                    s.delete(p); posts_count += 1
+                for src in s.exec(select(Source).where(Source.channel_id == ch.id)).all():
+                    s.delete(src); sources_count += 1
+                for r in s.exec(select(ChannelRule).where(ChannelRule.channel_id == ch.id)).all():
+                    s.delete(r); rules_count += 1
+
+            # Посты могут существовать и без явной привязки в этом цикле, если
+            # модель Post хранит user_id напрямую -- подчищаем по user_id тоже,
+            # на случай рассинхрона (defense in depth, как и в delete_channel).
+            extra_posts = s.exec(select(Post).where(Post.user_id == uid)).all()
+            for p in extra_posts:
+                s.delete(p); posts_count += 1
+
+            for ch in chans:
+                s.delete(ch)
+
+            payments_count = len(s.exec(select(Payment).where(Payment.user_id == uid)).all())
+            s.exec(delete(Payment).where(Payment.user_id == uid))
+            referrals_count = (
+                len(s.exec(select(Referral).where(Referral.referrer_id == uid)).all())
+                + len(s.exec(select(Referral).where(Referral.referred_id == uid)).all())
+            )
+            s.exec(delete(Referral).where(Referral.referrer_id == uid))
+            s.exec(delete(Referral).where(Referral.referred_id == uid))
+
+            u = s.get(User, uid)
+            if u:
+                s.delete(u)
+            s.commit()
+
+            logger.info(
+                f"[delete_account] uid={uid} основное удаление успешно: "
+                f"channels={len(chan_ids)} posts={posts_count} sources={sources_count} "
+                f"rules={rules_count} payments={payments_count} referrals={referrals_count}"
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[delete_account] uid={uid} КРИТИЧНАЯ ошибка основного удаления: {e}")
+        raise HTTPException(500, "Не удалось удалить аккаунт. Обновите страницу и попробуйте ещё раз.")
+
+    # Очистка IdempotencyKey -- отдельная, изолированная попытка, ПОСЛЕ того
+    # как основной аккаунт уже удалён и закоммичен. Тот же паттерн что и в
+    # delete_channel: если таблицы нет или запрос падает по любой причине,
+    # это НЕ должно откатывать уже выполненное удаление аккаунта.
+    try:
+        with session() as s:
+            removed = 0
+            for cid in chan_ids:
+                for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == cid)).all():
+                    s.delete(k); removed += 1
+            s.commit()
+            logger.info(f"[delete_account] uid={uid} IdempotencyKey очищены: {removed}")
+    except Exception as e:
+        logger.warning(f"[delete_account] uid={uid} не удалось очистить IdempotencyKey (не критично, аккаунт уже удалён): {e}")
+
     return {"ok": True}
 
 
