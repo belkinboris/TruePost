@@ -128,6 +128,12 @@ function renderTg(text) {
 }
 
 function toast(msg, kind="") {
+  // Последний рубеж защиты (P0 fix): что бы ни передали в toast — никогда
+  // не показываем [object Object] или другой нечитаемый JS-объект.
+  if (typeof msg !== "string") {
+    if (msg && typeof msg.message === "string") msg = msg.message;
+    else msg = "Не удалось выполнить действие. Попробуйте ещё раз.";
+  }
   document.querySelectorAll(".toast").forEach(t=>t.remove());
   const t=document.createElement("div");
   t.className="toast "+kind; t.textContent=msg;
@@ -143,7 +149,24 @@ async function api(method, path, body) {
   if (res.status===401){logout();throw new Error("Сессия истекла");}
   let data=null;
   try{data=await res.json();}catch(_){}
-  if(!res.ok) throw new Error((data&&data.detail)||"Ошибка запроса");
+  if(!res.ok){
+    // КРИТИЧНО (P0 fix): data.detail от FastAPI не всегда строка. При 422
+    // (ошибка валидации Pydantic) это список объектов вида
+    // [{"loc":[...],"msg":"...","type":"..."}] — если такой объект попадает
+    // в new Error() напрямую, его message превращается в нечитаемое
+    // "[object Object]" в toast. Нормализуем здесь централизованно.
+    let detail = data && data.detail;
+    let msg = "Ошибка запроса";
+    if (typeof detail === "string") {
+      msg = detail;
+    } else if (Array.isArray(detail) && detail.length) {
+      // Pydantic validation error array — берём первое читаемое сообщение.
+      msg = detail.map(d => (d && typeof d.msg === "string") ? d.msg : null).filter(Boolean).join("; ") || "Проверьте введённые данные.";
+    } else if (detail && typeof detail === "object") {
+      msg = detail.message || detail.msg || "Ошибка запроса";
+    }
+    throw new Error(msg);
+  }
   return data;
 }
 
@@ -278,9 +301,19 @@ function _nextGenerationLabel(c){
 }
 
 async function renderDashboard(){
+  // Skeleton сразу, без ожидания данных (task item 4 acceptance criteria:
+  // "dashboard shows skeleton/loader immediately, no blank screen").
+  $("app").innerHTML=`<div class="wrap"><div class="text-faint" style="padding:40px;text-align:center">Загрузка…</div></div>`;
+
+  const tUserStart = performance.now();
   await refreshUser();
+  console.log(`[timing] refreshUser() в renderDashboard: ${(performance.now()-tUserStart).toFixed(0)}ms`);
+
   let chans=[];
+  const tChansStart = performance.now();
   try{chans=await api("GET","/channels");}catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
+  console.log(`[timing] /channels: ${(performance.now()-tChansStart).toFixed(0)}ms, count=${chans.length}`);
+
   if(!chans.length){
     return renderQuickStart(); // новый пользователь — сразу к первому посту, без пустого дашборда
   }
@@ -311,12 +344,17 @@ let _ncVoice="author",_ncFormat="story",_ncEmoji="minimal",_ncCta=false,_ncCtaTe
 // QUICK START — минимальный онбординг: тема -> первый пост, без подключения канала
 function renderQuickStart(){
   trackGoal("quick_start_viewed");
-  // Idempotency key (task item E): один на сессию quick start, генерируется
-  // при показе экрана. Переживает повторный клик после "Load failed" в
-  // рамках одной загрузки страницы — на полный reload генерируется новый,
-  // но это нормально: пользователь, начавший заново, осознанно начинает
-  // новую попытку, а не борется с зависшим запросом.
+
+  // КРИТИЧНО (P0 fix, task item 1): каждый новый quick start начинается с
+  // полностью чистого состояния. Раньше здесь обновлялся только
+  // App._qsRequestId, а App.channelId/App._qsAbout могли остаться от
+  // предыдущей сессии онбординга, если что-то в SPA-навигации не вызывало
+  // renderQuickStart() заново (browser back-forward cache, восстановление
+  // состояния и т.п.) — это была вероятная причина P0 stale-topic бага.
   App._qsRequestId = "qs" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  App.channelId = null;
+  App._qsAbout = "";
+  App._chan = null;
 
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <button class="back-link" style="margin-top:12px" onclick="go('dashboard')">← Все каналы</button>
@@ -333,9 +371,30 @@ function renderQuickStart(){
   setTimeout(()=>{const el=$("qs_about");if(el) el.focus();},100);
 }
 
+let _qsGenerateInFlight = false;
+
 async function qsGenerate(){
+  // КРИТИЧНО (P0 fix): защита от двойного клика через явный флаг, не только
+  // через btn.disabled. disabled выставляется синхронно в начале функции,
+  // но между двумя очень быстрыми кликами браузер может не успеть
+  // перерисовать DOM-состояние кнопки до второго клика — флаг in-memory
+  // гарантированно блокирует повторный вызов независимо от рендера.
+  if (_qsGenerateInFlight) {
+    toast("Пост уже генерируется, подождите несколько секунд.", "err");
+    return;
+  }
   const about=($("qs_about").value||"").trim();
   if(!about) return toast("Опишите тему","err");
+  _qsGenerateInFlight = true;
+  try{
+    await _qsGenerateImpl(about);
+  } finally {
+    _qsGenerateInFlight = false;
+  }
+}
+
+async function _qsGenerateImpl(about){
+  console.log(`[qsGenerate] input_topic=«${about}» client_request_id=${App._qsRequestId}`);
   trackGoal("quick_start_submitted",{topic:about});
   const btn=$("qs_btn");
   btn.innerHTML='<span class="spinner"></span> Проверяю тему…';btn.disabled=true;
@@ -1217,13 +1276,15 @@ function renderPostCard(p, pubMs, channelEnabled){
   }
 
   // ── Кнопки: одна primary + один secondary, остальное в меню "..." ────
+  const channelConnected = App._chan && App._chan.tg_chat && App._chan.verified;
+  const publishDisabledAttr = channelConnected ? "" : `disabled title="Сначала подключите Telegram-канал"`;
   let primaryBtn="", secondaryBtn="", menuItems="";
   if(isFailed){
     primaryBtn=`<button class="btn btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Исправить</button>`;
-    secondaryBtn=`<button class="btn-outline btn-sm" onclick="publishPost(${p.id})">Повторить</button>`;
+    secondaryBtn=`<button class="btn-outline btn-sm" onclick="publishPost(${p.id})" ${publishDisabledAttr}>Повторить</button>`;
     menuItems=`<button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});deletePost(${p.id})">Удалить</button>`;
   } else if(editable){
-    primaryBtn=`<button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">Опубликовать сейчас</button>`;
+    primaryBtn=`<button class="btn btn-green btn-sm" onclick="publishPost(${p.id})" ${publishDisabledAttr}>Опубликовать сейчас</button>`;
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     menuItems=`
       <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">⏰ Запланировать</button>
@@ -1231,7 +1292,7 @@ function renderPostCard(p, pubMs, channelEnabled){
       <button class="menu-item" onclick="closePostMenu(${p.id});regenPost(${p.id})" id="regen_${p.id}">↻ Сгенерировать заново</button>`;
   } else if(sched){
     primaryBtn=`<button class="btn-outline btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
-    secondaryBtn=`<button class="btn-ghost btn-sm" onclick="publishPost(${p.id})">Опубликовать сейчас</button>`;
+    secondaryBtn=`<button class="btn-ghost btn-sm" onclick="publishPost(${p.id})" ${publishDisabledAttr}>Опубликовать сейчас</button>`;
     menuItems=`
       <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">📅 Перенести</button>
       <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>`;
@@ -1982,6 +2043,15 @@ async function savePost(id){
   catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
 }
 async function publishPost(id){
+  // P0 fix (third issue): если канал не подключён к Telegram, не пытаемся
+  // публиковать вообще — показываем понятное сообщение вместо того чтобы
+  // дать запросу дойти до Telegram API и упасть с технической ошибкой.
+  const chan = App._chan;
+  if (chan && (!chan.tg_chat || !chan.verified)) {
+    toast("Сначала подключите Telegram-канал, потом можно будет опубликовать пост.", "err");
+    return;
+  }
+
   const ta=$("pt_"+id);
   if(ta&&!ta.classList.contains("hidden")) try{await api("PATCH","/posts/"+id,{text:ta.value});}catch(_){}
 
@@ -2001,7 +2071,7 @@ async function publishPost(id){
     return;
   }
   if(error){
-    toast(error.message||"Ошибка","err");
+    toast((error&&error.message)||"Не удалось опубликовать пост. Попробуйте ещё раз.","err");
     if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
     return;
   }
@@ -2093,12 +2163,37 @@ function initTelegram(){
 }
 
 async function boot(){
+  // Timing instrumentation (task item 4): измеряем каждый этап загрузки,
+  // не меняя логику, чтобы понять где реально уходит 15-20 секунд —
+  // backend cold start, /me, /channels, или что-то другое.
+  const t0 = performance.now();
+  console.log(`[timing] boot() start, since navigation: ${t0.toFixed(0)}ms`);
+
   initTelegram();
   captureLandingSession();
+
+  const tConfigStart = performance.now();
   try{App.cfg=await api("GET","/config");}catch(_){App.cfg={packages:[]};}
+  console.log(`[timing] /config: ${(performance.now()-tConfigStart).toFixed(0)}ms`);
+
   initCookieBanner();initKeyboardDismiss();
-  if(!App.token) return renderAuth();
-  try{App.user=await api("GET","/me");go("dashboard");}catch(_){logout();}
+  if(!App.token){
+    console.log(`[timing] boot() total (no token, -> renderAuth): ${(performance.now()-t0).toFixed(0)}ms`);
+    return renderAuth();
+  }
+
+  const tMeStart = performance.now();
+  try{
+    App.user=await api("GET","/me");
+    console.log(`[timing] /me: ${(performance.now()-tMeStart).toFixed(0)}ms`);
+    const tRouteStart = performance.now();
+    await go("dashboard");
+    console.log(`[timing] go('dashboard') incl. /channels + render: ${(performance.now()-tRouteStart).toFixed(0)}ms`);
+  }catch(_){
+    console.log(`[timing] /me failed after ${(performance.now()-tMeStart).toFixed(0)}ms`);
+    logout();
+  }
+  console.log(`[timing] boot() total: ${(performance.now()-t0).toFixed(0)}ms`);
 }
 
 // GLOBALS
