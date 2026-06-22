@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 
 import uvicorn
-from fastapi import FastAPI, Depends, HTTPException, Request, Header
+from fastapi import FastAPI, Depends, HTTPException, Request, Header, BackgroundTasks
 from fastapi.responses import PlainTextResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from sqlmodel import select
@@ -591,13 +591,36 @@ def edit_post(post_id: int, data: PostPatch, user: User = Depends(current_user))
         return p.model_dump()
 
 
+@app.get("/api/posts/{post_id}/status")
+def post_status(post_id: int, user: User = Depends(current_user)):
+    """
+    Лёгкий статус-эндпоинт для reconciliation на фронте после ложного
+    timeout публикации (P0 fix): фронт опрашивает его, чтобы узнать
+    реальное состояние поста, не повторяя сам publish.
+    """
+    with session() as s:
+        p = _own_post(s, post_id, user)
+        return {
+            "id": p.id,
+            "status": p.status,
+            "telegram_message_id": p.tg_message_id,
+            "published_at": p.published_at.isoformat() if p.published_at else None,
+        }
+
+
 @app.post("/api/posts/{post_id}/publish")
-async def publish(post_id: int, user: User = Depends(current_user)):
+async def publish(post_id: int, background_tasks: BackgroundTasks, user: User = Depends(current_user)):
     with session() as s:
         _own_post(s, post_id, user)
     result = await tasks.publish_post(post_id)
     if not result["ok"]:
         raise HTTPException(400, result["message"])
+    # Уведомление и автодогенерация очереди — после ответа клиенту, не
+    # блокируют его (см. tasks.publish_post: это была причина false timeout,
+    # когда автодогенерация следующего поста в очереди задерживала HTTP-ответ
+    # на десятки секунд уже после успешной публикации в Telegram).
+    if not result.get("already_published"):
+        background_tasks.add_task(tasks.post_publish_followup, post_id)
     return result
 
 

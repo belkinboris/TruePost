@@ -240,7 +240,11 @@ async def publish_post(post_id: int) -> dict:
             # Идемпотентность: если пост уже опубликован (например из-за
             # повторного клика после ложного timeout на фронте), не публикуем
             # второй раз — просто сообщаем что уже готово.
-            return {"ok": True, "message": "Пост уже опубликован", "already_published": True}
+            return {
+                "ok": True, "message": "Пост уже опубликован", "already_published": True,
+                "telegram_message_id": post.tg_message_id,
+                "published_at": post.published_at.isoformat() if post.published_at else None,
+            }
         channel = s.get(Channel, post.channel_id)
         user = s.get(User, post.user_id)
         text = generator._clean_post(post.text)  # дочищаем перед публикацией
@@ -248,33 +252,66 @@ async def publish_post(post_id: int) -> dict:
 
     result = await telegram_api.send_message(chat, text)
     if not result.get("ok"):
-        return {"ok": False, "message": f"Telegram: {result.get('description')}"}
+        # Сырой Telegram description никогда не попадает в message напрямую —
+        # логируем отдельно, пользователю отдаём только нормализованный текст.
+        raw_desc = result.get("description", "")
+        logger.warning(f"Пост {post_id}: ошибка публикации в Telegram, raw_telegram_error=«{raw_desc}»")
+        return {"ok": False, "message": telegram_api.normalize_publish_error(raw_desc)}
 
-    notify_chat_id = None
-    notify_title = ""
+    # КРИТИЧНО (P0 fix): сохраняем published-статус в БД СРАЗУ после успеха
+    # Telegram и немедленно возвращаем ответ клиенту. Уведомления и
+    # автодогенерация очереди уходят в фон отдельной задачей — раньше они
+    # выполнялись синхронно до return, и автодогенерация (полный вызов
+    # Claude API с web_search) могла занимать десятки секунд, из-за чего
+    # фронт получал false timeout уже ПОСЛЕ того как пост появился в Telegram.
+    published_at = datetime.utcnow()
+    message_id = result["result"].get("message_id")
     with session() as s:
         post = s.get(Post, post_id)
-        channel = s.get(Channel, post.channel_id)
-        user = s.get(User, post.user_id)
         post.status = "published"
-        post.published_at = datetime.utcnow()
-        post.tg_message_id = result["result"].get("message_id")
+        post.published_at = published_at
+        post.tg_message_id = message_id
         s.add(post); s.commit()
 
-        if user and user.notify_published and user.tg_chat_id:
-            notify_chat_id = user.tg_chat_id
-            notify_title = channel.title if channel else ""
+    return {
+        "ok": True, "message": "Опубликовано",
+        "telegram_message_id": message_id,
+        "published_at": published_at.isoformat(),
+    }
+
+
+async def post_publish_followup(post_id: int):
+    """
+    Неблокирующие операции после публикации: уведомление пользователю и
+    автодогенерация очереди. Выполняются в фоне отдельной задачей, чтобы не
+    задерживать HTTP-ответ клиенту (см. publish_post — это была причина
+    false timeout в Bug 2).
+    """
+    notify_chat_id = None
+    notify_title = ""
+    try:
+        with session() as s:
+            post = s.get(Post, post_id)
+            if not post:
+                return
+            channel = s.get(Channel, post.channel_id)
+            user = s.get(User, post.user_id)
+            if user and user.notify_published and user.tg_chat_id:
+                notify_chat_id = user.tg_chat_id
+                notify_title = channel.title if channel else ""
+    except Exception as e:
+        logger.warning(f"post-publish followup (notify lookup) для поста {post_id}: {e}")
 
     if notify_chat_id:
-        await _notify_user_by_id(notify_chat_id, f"✅ <b>Пост опубликован</b>\n\nКанал: {notify_title}")
+        try:
+            await _notify_user_by_id(notify_chat_id, f"✅ <b>Пост опубликован</b>\n\nКанал: {notify_title}")
+        except Exception as e:
+            logger.warning(f"post-publish followup (notify send) для поста {post_id}: {e}")
 
-    # Автодогенерация: держим минимум 3 поста в очереди
     try:
         await _ensure_queue(post_id)
     except Exception as e:
-        logger.warning(f"auto-refill failed: {e}")
-
-    return {"ok": True, "message": "Опубликовано"}
+        logger.warning(f"auto-refill failed для поста {post_id}: {e}")
 
 
 def _next_publish_time(channel: Channel, now: datetime) -> datetime:

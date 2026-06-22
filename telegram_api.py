@@ -77,6 +77,74 @@ def normalize_chat(raw: str) -> str:
     )
 
 
+_TELEGRAM_ERROR_MAP = [
+    # (паттерн в сыром description от Telegram, понятное русское сообщение)
+    # Порядок важен — более специфичные паттерны идут раньше общих.
+    ("member list is inaccessible",
+     "Не удалось получить список администраторов канала. Убедитесь, что @{bot} добавлен администратором, и попробуйте ещё раз."),
+    ("not enough rights",
+     "Бот пока не найден в канале. Проверьте, что вы добавили @{bot} администратором канала."),
+    ("chat not found",
+     "Канал «{chat}» не найден. Проверьте username точно как в ссылке канала."),
+    ("user not found",
+     "Канал «{chat}» не найден. Проверьте username точно как в ссылке канала."),
+    ("forbidden",
+     "Нет доступа к каналу «{chat}». Сначала добавьте @{bot} администратором."),
+    ("bot was blocked",
+     "Бот заблокирован в этом канале. Удалите блокировку и попробуйте снова."),
+    ("bad request",
+     "Не удалось проверить канал. Проверьте, что канал публичный и что @{bot} добавлен администратором."),
+]
+
+
+def _normalize_telegram_error(raw_description: str, chat: str = "", bot_username: str = "") -> str:
+    """
+    Централизованная нормализация ошибок Telegram Bot API в понятный
+    русский текст для пользователя (P0 fix: raw provider errors must never
+    reach the UI). Сырой description логируется отдельно вызывающим кодом,
+    сюда подставляется только для сопоставления с паттернами, наружу не
+    возвращается ни в одной ветке.
+    """
+    bot = bot_username or config.TELEGRAM_BOT_USERNAME or "Trpst_bot"
+    desc_lower = (raw_description or "").lower()
+    for pattern, template in _TELEGRAM_ERROR_MAP:
+        if pattern in desc_lower:
+            return template.format(bot=bot, chat=chat)
+    # Неизвестный паттерн -- не показываем сырой текст, общий fallback.
+    return f"Не удалось проверить канал «{chat}». Проверьте, что канал публичный и что @{bot} добавлен администратором, затем попробуйте ещё раз."
+
+
+_PUBLISH_ERROR_MAP = [
+    ("member list is inaccessible",
+     "Не удалось опубликовать пост. Убедитесь, что @{bot} добавлен администратором канала."),
+    ("not enough rights",
+     "У бота нет права публиковать сообщения в этом канале. Дайте право «Публиковать сообщения»."),
+    ("chat not found",
+     "Канал не найден. Проверьте подключение канала в настройках."),
+    ("user not found",
+     "Канал не найден. Проверьте подключение канала в настройках."),
+    ("forbidden",
+     "Нет доступа к каналу. Проверьте, что @{bot} всё ещё администратор канала."),
+    ("bot was blocked",
+     "Бот заблокирован в этом канале. Удалите блокировку и попробуйте снова."),
+]
+
+
+def normalize_publish_error(raw_description: str, bot_username: str = "") -> str:
+    """
+    Нормализация ошибок Telegram конкретно для контекста публикации поста
+    (formulировка отличается от verify — "не удалось опубликовать", а не
+    "не удалось проверить"). Используется в tasks.publish_post. Сырой
+    description никогда не возвращается пользователю.
+    """
+    bot = bot_username or config.TELEGRAM_BOT_USERNAME or "Trpst_bot"
+    desc_lower = (raw_description or "").lower()
+    for pattern, template in _PUBLISH_ERROR_MAP:
+        if pattern in desc_lower:
+            return template.format(bot=bot)
+    return f"Не удалось опубликовать пост в Telegram. Проверьте подключение канала и попробуйте ещё раз."
+
+
 async def _call(method: str, payload: dict) -> dict:
     if not config.TELEGRAM_BOT_TOKEN:
         return {"ok": False, "description": "TELEGRAM_BOT_TOKEN не задан"}
@@ -129,7 +197,7 @@ async def send_notification(tg_chat_id: int, text: str) -> tuple[bool, str]:
         return False, "Аккаунт пользователя удалён."
     if "forbidden" in desc:
         return False, "Нет доступа. Напишите /start боту @" + (config.TELEGRAM_BOT_USERNAME or "боту")
-    return False, f"Ошибка отправки: {result.get('description', '')}"
+    return False, _normalize_telegram_error(desc)
 
 
 async def verify_channel(chat: str) -> tuple[bool, str]:
@@ -150,24 +218,15 @@ async def verify_channel(chat: str) -> tuple[bool, str]:
     chat_info = await _call("getChat", {"chat_id": chat})
     if not chat_info.get("ok"):
         desc = chat_info.get("description", "")
-        if "not found" in desc.lower():
-            logger.info(f"verification_error_code=chat_not_found channel_username_normalized=«{chat}»")
-            return False, f"Канал «{chat}» не найден. Проверь username точно как в ссылке канала."
-        if "forbidden" in desc.lower():
-            logger.info(f"verification_error_code=chat_forbidden channel_username_normalized=«{chat}»")
-            return False, f"Нет доступа к каналу «{chat}». Сначала добавь бота администратором."
-        logger.info(f"verification_error_code=chat_lookup_failed channel_username_normalized=«{chat}»")
-        return False, f"Не удалось найти канал: {desc}"
+        logger.info(f"verification_error_code=chat_lookup_failed channel_username_normalized=«{chat}» raw_telegram_error=«{desc}»")
+        return False, _normalize_telegram_error(desc, chat=chat)
 
     admins = await _call("getChatAdministrators", {"chat_id": chat})
     bot_name = "@" + (config.TELEGRAM_BOT_USERNAME or "Trpst_bot")
     if not admins.get("ok"):
         desc = admins.get("description", "")
-        if "not enough rights" in desc.lower() or "forbidden" in desc.lower():
-            logger.info(f"verification_error_code=bot_not_admin channel_username_normalized=«{chat}»")
-            return False, f"Бот пока не найден в канале. Проверьте, что вы добавили {bot_name} администратором канала."
-        logger.info(f"verification_error_code=admins_lookup_failed channel_username_normalized=«{chat}»")
-        return False, f"Не удалось получить список администраторов: {desc}"
+        logger.info(f"verification_error_code=admins_lookup_failed channel_username_normalized=«{chat}» raw_telegram_error=«{desc}»")
+        return False, _normalize_telegram_error(desc, chat=chat)
 
     bot_admin = next((a for a in admins["result"] if a["user"]["id"] == bot_id), None)
 
