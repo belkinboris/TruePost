@@ -57,6 +57,7 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
             return {"ok": False, "message": "Владелец не найден"}
         if user.token_balance <= 0:
             return {"ok": False, "message": "Закончились токены. Пополните баланс."}
+        channel_about = channel.about
         sources = s.exec(
             select(Source).where(Source.channel_id == channel_id, Source.enabled == True)  # noqa
         ).all()
@@ -64,6 +65,39 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
         # Загружаем правила канала
         rules = s.exec(select(ChannelRule).where(ChannelRule.channel_id == channel_id)).all()
         rules_text = "\n".join(f"• {r.rule_text}" for r in rules) if rules else ""
+
+    # Topic validation (Parts 1-3 задачи): классифицируем тему ДО любых дорогих
+    # операций (research, web_search). Тема для проверки — явный topic если
+    # передан, иначе тема канала (channel.about), потому что именно она пойдёт
+    # в генерацию когда topic не указан явно (см. generator.generate_post).
+    topic_to_classify = topic or channel_about
+    classification = await generator.classify_topic(topic_to_classify)
+    logger.info(f"Канал {channel_id}: topic_classification={classification} для «{topic_to_classify[:80]}»")
+    rejection_msg = generator.rejection_message(classification)
+    if rejection_msg:
+        # Defense in depth: тема уже должна была быть отклонена на этапе
+        # /api/validate-topic до создания канала (см. основной фикс). Если
+        # мы всё же оказались здесь с invalid topic — это редкий случай
+        # расхождения между двумя независимыми вызовами классификатора на
+        # погранично-неопределённой теме. Подчищаем черновик канала, чтобы
+        # неподходящая тема не осталась видимой в dashboard/settings —
+        # но только если у канала ещё нет ни одного поста (это значит он
+        # только что создан в онбординге, а не существующий канал
+        # пользователя, тему которого позже отредактировали в настройках).
+        with session() as s:
+            existing_posts = s.exec(select(Post).where(Post.channel_id == channel_id)).first()
+            if not existing_posts:
+                ch = s.get(Channel, channel_id)
+                if ch:
+                    logger.info(f"Канал {channel_id}: удаляю draft-канал из-за отклонённой темы ({classification})")
+                    s.delete(ch)
+                    s.commit()
+        return {
+            "ok": False,
+            "message": rejection_msg,
+            "topic_classification": classification,
+            "channel_deleted": True,
+        }
 
     # Загружаем заголовки последних постов чтобы не повторять темы
     recent_titles = ""
@@ -112,14 +146,36 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
         except Exception as e:
             logger.warning(f"Ошибка проверки новостей: {e}")
 
+    generation_mode = "news" if (getattr(channel, "channel_type", "thematic") == "news") else (
+        "evergreen" if not channel.use_web_search or topic else "news"
+    )
     try:
         text, tokens = await generator.generate_post(channel, material, topic, rules_text, recent_titles)
     except generator.GenerationError as e:
         # Понятная ошибка — показываем как есть
+        logger.info(
+            f"Канал {channel_id}: generation_failed_reason=generation_error "
+            f"user_input_topic=«{topic_to_classify[:80]}» topic_classification={classification} "
+            f"generation_mode={generation_mode}"
+        )
         return {"ok": False, "message": str(e)}
     except Exception as e:
         logger.error(f"Ошибка генерации канала {channel_id}: {e}")
+        logger.info(
+            f"Канал {channel_id}: generation_failed_reason=exception "
+            f"user_input_topic=«{topic_to_classify[:80]}» topic_classification={classification} "
+            f"generation_mode={generation_mode}"
+        )
         return {"ok": False, "message": "Временная ошибка. Попробуйте ещё раз через минуту."}
+
+    # Логирование для диагностики (Part 7 задачи): видно какая тема пришла,
+    # как классифицирована, какой режим генерации и какая тема в итоге вышла.
+    final_topic_line = text.strip().split("\n")[0][:100] if text else ""
+    logger.info(
+        f"Канал {channel_id}: user_input_topic=«{topic_to_classify[:80]}» "
+        f"topic_classification={classification} generation_mode={generation_mode} "
+        f"final_post_topic=«{final_topic_line}»"
+    )
 
     if _looks_like_menu(text):
         return {"ok": False, "message": "ИИ не смог определить тему. Задайте тему поста вручную."}
@@ -180,6 +236,11 @@ async def publish_post(post_id: int) -> dict:
         post = s.get(Post, post_id)
         if not post:
             return {"ok": False, "message": "Пост не найден"}
+        if post.status == "published":
+            # Идемпотентность: если пост уже опубликован (например из-за
+            # повторного клика после ложного timeout на фронте), не публикуем
+            # второй раз — просто сообщаем что уже готово.
+            return {"ok": True, "message": "Пост уже опубликован", "already_published": True}
         channel = s.get(Channel, post.channel_id)
         user = s.get(User, post.user_id)
         text = generator._clean_post(post.text)  # дочищаем перед публикацией

@@ -313,6 +313,32 @@ def list_channels(user: User = Depends(current_user)):
         return [_channel_dict(c) for c in chans]
 
 
+class _TopicValidateIn(_BaseModel):
+    topic: str
+
+
+@app.post("/api/validate-topic")
+async def validate_topic(data: _TopicValidateIn, user: User = Depends(current_user)):
+    """
+    Валидация темы ДО создания канала (quick start onboarding).
+
+    Критично: этот эндпоинт не создаёт ничего в БД. Раньше тема проверялась
+    только внутри generate_for_channel(), то есть ПОСЛЕ создания Channel —
+    из-за этого неподходящая тема всё равно попадала в dashboard/settings
+    как уже существующий канал, даже если генерация поста потом отказывала.
+    Теперь фронт обязан вызвать этот эндпоинт первым и не создавать канал
+    при отрицательном результате.
+    """
+    classification = await generator.classify_topic(data.topic)
+    rejection_msg = generator.rejection_message(classification)
+    logger.info(f"validate_topic: user={user.id} topic_classification={classification} topic=«{data.topic[:80]}»")
+    return {
+        "ok": rejection_msg is None,
+        "classification": classification,
+        "message": rejection_msg,
+    }
+
+
 @app.post("/api/channels")
 def create_channel(data: ChannelIn, user: User = Depends(current_user)):
     with session() as s:

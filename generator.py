@@ -134,6 +134,75 @@ class GenerationError(Exception):
     """Понятная ошибка генерации для показа пользователю."""
     pass
 
+
+class TopicRejected(Exception):
+    """
+    Тема не прошла валидацию (неясная/недопустимая/неподдерживаемая).
+    message -- готовый русский текст для показа пользователю.
+    classification -- для логирования (Part 7 задачи).
+    """
+    def __init__(self, message: str, classification: str):
+        self.message = message
+        self.classification = classification
+        super().__init__(message)
+
+
+_TOPIC_CLASSIFY_SYSTEM = """Ты классифицируешь тему для Telegram-канала. Ответь ОДНИМ словом, без пояснений:
+
+valid_topic — нормальная тема для контент-канала (бизнес, технологии, развлечения, игры, новости, лайфстайл, здоровье в нейтральном ключе, юмор без откровенного контента и т.п.)
+unclear_topic — набор случайных символов, бессмысленный текст, невозможно понять о чём
+adult_or_sexual_topic — явно сексуальный, эротический контент или фокус на интимных частях тела/практиках
+unsafe_topic — призывы к насилию, экстремизм, незаконные действия, опасный контент
+unsupported_topic — тема технически невозможна для канала (например пустая)
+
+Если тема двусмысленная но может иметь нейтральное прочтение (например медицинский термин) — выбирай valid_topic, не будь излишне строгим. Сомневаешься между valid_topic и unclear_topic — выбирай valid_topic."""
+
+
+async def classify_topic(topic: str) -> str:
+    """
+    Классифицирует тему перед генерацией (Part 1 задачи).
+    Возвращает одно из: valid_topic, unclear_topic, adult_or_sexual_topic,
+    unsafe_topic, unsupported_topic, classification_failed.
+
+    ВАЖНО (исправлено по итогам ревью): при сбое классификации (API error,
+    timeout, непонятный ответ модели) возвращается classification_failed,
+    а НЕ valid_topic. Это блокирующий статус — лучше лишний раз попросить
+    пользователя попробовать снова, чем пропустить неподходящую тему из-за
+    технической ошибки самой проверки.
+    """
+    topic = (topic or "").strip()
+    if not topic:
+        return "unsupported_topic"
+    if len(topic) < 2:
+        return "unclear_topic"
+    try:
+        text, _ = await _call_claude(_TOPIC_CLASSIFY_SYSTEM, topic, use_web_search=False, max_tokens=20)
+        text = (text or "").strip().lower()
+        for label in ("valid_topic", "unclear_topic", "adult_or_sexual_topic", "unsafe_topic", "unsupported_topic"):
+            if label in text:
+                return label
+        # Модель ответила, но не одним из ожидаемых слов — неоднозначный
+        # результат классификации, тоже блокируем, а не пропускаем молча.
+        logger.warning(f"classify_topic: неожиданный ответ классификатора «{text}» для темы «{topic}»")
+        return "classification_failed"
+    except Exception as e:
+        logger.warning(f"Ошибка классификации темы «{topic}»: {e}")
+        return "classification_failed"
+
+
+_REJECTION_MESSAGES = {
+    "adult_or_sexual_topic": "Не могу сделать пост на такую тему в этом формате. Попробуйте нейтральную или деловую тему — например: «новости M&A в России», «канал про Roblox», «советы для малого бизнеса».",
+    "unsafe_topic": "Не могу сделать пост на такую тему в этом формате. Попробуйте нейтральную или деловую тему — например: «новости M&A в России», «канал про Roblox», «советы для малого бизнеса».",
+    "unclear_topic": "Не понял тему. Напишите проще: например «M&A сделки в России», «новости крипты», «канал про Roblox».",
+    "unsupported_topic": "Не понял тему. Напишите проще: например «M&A сделки в России», «новости крипты», «канал про Roblox».",
+    "classification_failed": "Не удалось проверить тему. Попробуйте переформулировать.",
+}
+
+
+def rejection_message(classification: str) -> str | None:
+    """Готовое русское сообщение для отклонённой темы, либо None если тема валидна."""
+    return _REJECTION_MESSAGES.get(classification)
+
 async def _call_claude(system, user, use_web_search, max_tokens=700):
     body = {
         "model": config.ANTHROPIC_MODEL,
@@ -257,38 +326,77 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
 - Верни ТОЛЬКО текст поста. Никаких комментариев ни до ни после"""
 
     use_search = channel.use_web_search and not topic
+    effective_topic = topic or channel.about  # тема, на которую пост ОБЯЗАН быть
+
     if topic:
         user_msg = f"Напиши пост на тему: «{topic}»."
         if source_material:
             user_msg += f"\n\nИсточники:\n{source_material[:4000]}"
         elif channel.use_web_search:
-            user_msg += " Найди актуальные факты."
+            user_msg += " Найди актуальные факты по этой теме."
     elif source_material:
-        user_msg = "Напиши пост из этих материалов:\n\n" + source_material[:4000]
+        user_msg = f"Напиши пост на тему «{effective_topic}» из этих материалов:\n\n" + source_material[:4000]
     elif channel.use_web_search:
-        user_msg = "Найди свежий конкретный факт по теме. Напиши пост с деталями. Используй только актуальные данные из поиска, не из памяти."
+        # КРИТИЧНО: тема канала должна явно попадать в user-сообщение, а не
+        # только в системный промпт — иначе модель может "соскользнуть" на
+        # более комфортную/частую тему при поиске (это и было причиной P0-бага,
+        # когда пост про "соски" ушёл в крипту). Жёстко фиксируем тему здесь.
+        user_msg = f"Напиши пост на тему «{effective_topic}». Найди свежий конкретный факт именно по этой теме. Используй только актуальные данные из поиска, не из памяти. Пост должен быть строго про «{effective_topic}», ни про что другое."
     else:
-        user_msg = "Напиши пост. Конкретный пример — человек, ситуация, деталь."
+        user_msg = f"Напиши пост на тему «{effective_topic}». Конкретный пример — человек, ситуация, деталь."
 
     text, tokens = await _call_claude(system, user_msg, use_search, max_tokens=650)
     cleaned = _clean_post(text)
+    total_tokens = tokens
+    fallback_used = "none"
 
     if _looks_like_refusal(cleaned) and use_search:
         # Поиск не нашёл релевантных фактов и модель вместо поста переспрашивает
         # тему. Не показываем это пользователю — тихо перегенерируем обычным
         # постом по теме, без поиска. Пользователь просто получает результат.
-        logger.info(f"Канал {channel.id}: web_search дал отказ/вопрос вместо поста, fallback без поиска")
-        fallback_msg = f"Напиши пост на тему: «{channel.about}». Конкретный пример — человек, ситуация, деталь. Не нужно искать в интернете, пиши по своим знаниям."
+        logger.info(f"Канал {channel.id}: web_search дал отказ/вопрос вместо поста, fallback_used=no_search_retry")
+        fallback_used = "no_search_retry"
+        fallback_msg = f"Напиши пост на тему «{effective_topic}». Конкретный пример — человек, ситуация, деталь. Не нужно искать в интернете, пиши по своим знаниям. Пост должен быть строго про «{effective_topic}»."
         text2, tokens2 = await _call_claude(system, fallback_msg, False, max_tokens=650)
-        cleaned2 = _clean_post(text2)
-        if not _looks_like_refusal(cleaned2):
-            return cleaned2, tokens + tokens2
-        # Если и fallback не помог (крайне редкий случай) — возвращаем то что
-        # есть, но это лучше чем пустой экран; _looks_like_refusal минимизирует
-        # такие случаи почти до нуля.
-        return cleaned2 or cleaned, tokens + tokens2
+        cleaned = _clean_post(text2)
+        total_tokens += tokens2
 
-    return cleaned, tokens
+    # Post-topic match check (Part 5 задачи): проверяем что результат реально
+    # про заданную тему, а не ушёл в другую тематику. Только для случаев без
+    # явного topic от вызывающего кода (онбординг, авто-генерация) — там цена
+    # ошибки выше, потому что пользователь не формулировал topic сам только что.
+    if not _looks_like_refusal(cleaned):
+        match_ok, match_tokens = await _check_topic_match(cleaned, effective_topic)
+        total_tokens += match_tokens
+        logger.info(f"Канал {channel.id}: post_topic_match_score={'pass' if match_ok else 'fail'} fallback_used={fallback_used}")
+        if not match_ok:
+            logger.info(f"Канал {channel.id}: post-topic mismatch для темы «{effective_topic}», повторная генерация без поиска")
+            fallback_used = "topic_mismatch_retry"
+            retry_msg = f"Напиши пост СТРОГО на тему «{effective_topic}», не отклоняясь от неё. Конкретный пример — человек, ситуация, деталь. Не используй поиск в интернете."
+            text3, tokens3 = await _call_claude(system, retry_msg, False, max_tokens=650)
+            cleaned = _clean_post(text3)
+            total_tokens += tokens3
+
+    return cleaned, total_tokens
+
+
+async def _check_topic_match(post_text: str, topic: str) -> tuple[bool, int]:
+    """
+    Post-topic match check (Part 5): быстрая проверка что текст поста
+    реально соответствует заданной теме, а не ушёл в другую тематику.
+    Возвращает (match_ok, tokens_used). При сбое проверки -- match_ok=True
+    (не блокируем публикацию из-за технической ошибки самой проверки).
+    """
+    if not post_text or not topic:
+        return True, 0
+    system = "Ответь ОДНИМ словом: YES если текст поста соответствует заданной теме (хотя бы по смыслу, не обязательно дословно), NO если пост явно про другую тему."
+    user = f"Тема: «{topic}»\n\nТекст поста:\n{post_text[:600]}"
+    try:
+        text, tokens = await _call_claude(system, user, False, max_tokens=10)
+        return ("no" not in text.strip().lower()), tokens
+    except Exception as e:
+        logger.warning(f"Ошибка post-topic match check: {e}")
+        return True, 0
 
 
 async def check_news_available(channel: "Channel") -> tuple:
