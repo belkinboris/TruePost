@@ -982,17 +982,33 @@ async def yookassa_notify(request: Request):
 @app.delete("/api/me")
 def delete_account(user: User = Depends(current_user)):
     from database import ChannelRule
+    import uuid as _uuid
     uid = user.id
+    correlation_id = _uuid.uuid4().hex[:12]
+    log_prefix = f"[delete_account#{correlation_id}] uid={uid}"
+
+    def _fail(step: str, e: Exception):
+        logger.error(
+            f"{log_prefix} ОШИБКА на шаге «{step}»: "
+            f"exception_type={type(e).__name__} repr={repr(e)} "
+            f"orig={repr(getattr(e, 'orig', None))}"
+        )
+        raise HTTPException(
+            500,
+            f"Не удалось удалить аккаунт. Обновите страницу и попробуйте ещё раз. (код: {correlation_id})"
+        )
 
     try:
         with session() as s:
             chans = s.exec(select(Channel).where(Channel.user_id == uid)).all()
             chan_ids = [c.id for c in chans]
-            logger.info(f"[delete_account] uid={uid} начинаю удаление, channels_count={len(chan_ids)}")
+            logger.info(f"{log_prefix} шаг 1: найдено channels={len(chan_ids)}")
+    except Exception as e:
+        _fail("чтение channels", e)
 
-            posts_count = 0
-            sources_count = 0
-            rules_count = 0
+    posts_count = sources_count = rules_count = 0
+    try:
+        with session() as s:
             for ch in chans:
                 for p in s.exec(select(Post).where(Post.channel_id == ch.id)).all():
                     s.delete(p); posts_count += 1
@@ -1000,46 +1016,83 @@ def delete_account(user: User = Depends(current_user)):
                     s.delete(src); sources_count += 1
                 for r in s.exec(select(ChannelRule).where(ChannelRule.channel_id == ch.id)).all():
                     s.delete(r); rules_count += 1
-
-            # Посты могут существовать и без явной привязки в этом цикле, если
-            # модель Post хранит user_id напрямую -- подчищаем по user_id тоже,
-            # на случай рассинхрона (defense in depth, как и в delete_channel).
-            extra_posts = s.exec(select(Post).where(Post.user_id == uid)).all()
-            for p in extra_posts:
+            # Посты могут существовать и без явной привязки в цикле выше, если
+            # модель Post хранит user_id напрямую -- подчищаем по user_id тоже.
+            for p in s.exec(select(Post).where(Post.user_id == uid)).all():
                 s.delete(p); posts_count += 1
+            s.commit()
+            logger.info(f"{log_prefix} шаг 2: удалены posts={posts_count} sources={sources_count} rules={rules_count}")
+    except Exception as e:
+        _fail("удаление posts/sources/channel_rules", e)
 
+    try:
+        with session() as s:
             for ch in chans:
-                s.delete(ch)
+                ch2 = s.get(Channel, ch.id)
+                if ch2:
+                    s.delete(ch2)
+            s.commit()
+            logger.info(f"{log_prefix} шаг 3: удалены channels={len(chan_ids)}")
+    except Exception as e:
+        _fail("удаление channels", e)
 
+    try:
+        with session() as s:
             payments_count = len(s.exec(select(Payment).where(Payment.user_id == uid)).all())
             s.exec(delete(Payment).where(Payment.user_id == uid))
+            s.commit()
+            logger.info(f"{log_prefix} шаг 4: удалены payments={payments_count}")
+    except Exception as e:
+        _fail("удаление payments", e)
+
+    try:
+        with session() as s:
             referrals_count = (
                 len(s.exec(select(Referral).where(Referral.referrer_id == uid)).all())
                 + len(s.exec(select(Referral).where(Referral.referred_id == uid)).all())
             )
             s.exec(delete(Referral).where(Referral.referrer_id == uid))
             s.exec(delete(Referral).where(Referral.referred_id == uid))
+            s.commit()
+            logger.info(f"{log_prefix} шаг 5: удалены referrals={referrals_count}")
+    except Exception as e:
+        _fail("удаление referrals", e)
 
+    try:
+        with session() as s:
+            # КРИТИЧНО (root cause найден): User.referred_by -- это FK на
+            # user.id у ДРУГИХ пользователей (тех, кто зарегистрировался по
+            # реферальному коду этого аккаунта). На Postgres это настоящий
+            # FK constraint -- попытка удалить юзера, на которого ссылается
+            # чужая строка через referred_by, падает с ForeignKeyViolation.
+            # Локальный тест на SQLite этого не поймал, потому что SQLite по
+            # умолчанию не enforces FK constraints — баг проявлялся только
+            # на реальных продовых аккаунтах, у которых есть рефералы.
+            # Обнуляем ссылку (не удаляем самих рефералов, они остаются
+            # обычными пользователями, просто без привязки к удалённому
+            # пригласившему).
+            referred_users = s.exec(select(User).where(User.referred_by == uid)).all()
+            for ru in referred_users:
+                ru.referred_by = None
+                s.add(ru)
+            s.commit()
+            logger.info(f"{log_prefix} шаг 6: обнулён referred_by у {len(referred_users)} пользователей, которых пригласил uid={uid}")
+    except Exception as e:
+        _fail("обнуление referred_by у приглашённых пользователей", e)
+
+    try:
+        with session() as s:
             u = s.get(User, uid)
             if u:
                 s.delete(u)
-            s.commit()
-
-            logger.info(
-                f"[delete_account] uid={uid} основное удаление успешно: "
-                f"channels={len(chan_ids)} posts={posts_count} sources={sources_count} "
-                f"rules={rules_count} payments={payments_count} referrals={referrals_count}"
-            )
-    except HTTPException:
-        raise
+                s.commit()
+            logger.info(f"{log_prefix} шаг 7: пользователь удалён, ВСЁ ОСНОВНОЕ УДАЛЕНИЕ УСПЕШНО")
     except Exception as e:
-        logger.error(f"[delete_account] uid={uid} КРИТИЧНАЯ ошибка основного удаления: {e}")
-        raise HTTPException(500, "Не удалось удалить аккаунт. Обновите страницу и попробуйте ещё раз.")
+        _fail("удаление самого User", e)
 
     # Очистка IdempotencyKey -- отдельная, изолированная попытка, ПОСЛЕ того
-    # как основной аккаунт уже удалён и закоммичен. Тот же паттерн что и в
-    # delete_channel: если таблицы нет или запрос падает по любой причине,
-    # это НЕ должно откатывать уже выполненное удаление аккаунта.
+    # как основной аккаунт уже удалён и закоммичен. Любая её ошибка (включая
+    # отсутствие таблицы) не должна откатывать уже выполненное удаление.
     try:
         with session() as s:
             removed = 0
@@ -1047,9 +1100,9 @@ def delete_account(user: User = Depends(current_user)):
                 for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == cid)).all():
                     s.delete(k); removed += 1
             s.commit()
-            logger.info(f"[delete_account] uid={uid} IdempotencyKey очищены: {removed}")
+            logger.info(f"{log_prefix} шаг 8 (опционально): IdempotencyKey очищены: {removed}")
     except Exception as e:
-        logger.warning(f"[delete_account] uid={uid} не удалось очистить IdempotencyKey (не критично, аккаунт уже удалён): {e}")
+        logger.warning(f"{log_prefix} шаг 8 (опционально) не удался, НЕ критично: exception_type={type(e).__name__} repr={repr(e)}")
 
     return {"ok": True}
 
