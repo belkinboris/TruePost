@@ -97,13 +97,16 @@ app.include_router(landing_funnel_router)
 
 def current_user(authorization: str = Header(default="")) -> User:
     if not authorization.startswith("Bearer "):
+        logger.info("[auth] 401: no Bearer prefix in Authorization header")
         raise HTTPException(401, "Не авторизован")
     uid = security.verify_token(authorization[7:])
     if not uid:
+        logger.info(f"[auth] 401: verify_token returned None (token invalid/expired), token_prefix={authorization[7:17]}...")
         raise HTTPException(401, "Сессия истекла, войдите снова")
     with session() as s:
         user = s.get(User, uid)
         if not user:
+            logger.warning(f"[auth] 401: uid={uid} from valid token, but no such User in DB")
             raise HTTPException(401, "Пользователь не найден")
         s.expunge(user)
         return user
@@ -456,21 +459,44 @@ def patch_channel(channel_id: int, data: ChannelPatch, user: User = Depends(curr
 @app.delete("/api/channels/{channel_id}")
 def delete_channel(channel_id: int, user: User = Depends(current_user)):
     from database import ChannelRule
-    with session() as s:
-        ch = _own_channel(s, channel_id, user)
-        for src in s.exec(select(Source).where(Source.channel_id == channel_id)).all():
-            s.delete(src)
-        for p in s.exec(select(Post).where(Post.channel_id == channel_id)).all():
-            s.delete(p)
-        for r in s.exec(select(ChannelRule).where(ChannelRule.channel_id == channel_id)).all():
-            s.delete(r)
-        # Чистим idempotency-ключи, указывающие на этот канал (task item E) —
-        # иначе повторный клик с тем же client_request_id попытается вернуть
-        # уже удалённый канал.
-        for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == channel_id)).all():
-            s.delete(k)
-        s.delete(ch)
-        s.commit()
+    try:
+        with session() as s:
+            ch = _own_channel(s, channel_id, user)
+            for src in s.exec(select(Source).where(Source.channel_id == channel_id)).all():
+                s.delete(src)
+            for p in s.exec(select(Post).where(Post.channel_id == channel_id)).all():
+                s.delete(p)
+            for r in s.exec(select(ChannelRule).where(ChannelRule.channel_id == channel_id)).all():
+                s.delete(r)
+            s.delete(ch)
+            s.commit()
+    except HTTPException:
+        raise  # 404 "канал не найден" от _own_channel — пропускаем как есть, это уже понятный текст
+    except Exception as e:
+        logger.error(f"delete_channel: не удалось удалить канал {channel_id}: {e}")
+        raise HTTPException(500, "Не удалось удалить канал. Обновите страницу и попробуйте ещё раз.")
+
+    # Чистим idempotency-ключи, указывающие на этот канал (task item E) —
+    # иначе повторный клик с тем же client_request_id попытается вернуть
+    # уже удалённый канал.
+    #
+    # КРИТИЧНО (P0 regression fix): это отдельная, изолированная попытка,
+    # ПОСЛЕ того как сам канал и все его данные уже успешно удалены. Раньше
+    # очистка IdempotencyKey была частью той же транзакции, что и удаление
+    # канала — если таблица IdempotencyKey по любой причине не существовала
+    # в БД (например create_all() не успел создать её на проде), весь запрос
+    # падал с OperationalError и откатывал ВСЮ транзакцию, включая удаление
+    # канала. Теперь это не может случиться: основное удаление уже
+    # подтверждено и закоммичено выше, эта очистка — best-effort, любая её
+    # ошибка только логируется.
+    try:
+        with session() as s:
+            for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == channel_id)).all():
+                s.delete(k)
+            s.commit()
+    except Exception as e:
+        logger.warning(f"delete_channel: не удалось очистить IdempotencyKey для канала {channel_id} (не критично, канал уже удалён): {e}")
+
     return {"ok": True}
 
 
