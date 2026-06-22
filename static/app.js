@@ -2135,7 +2135,7 @@ async function openTgConnect(){
   if(!uid){
     // Нет токена — пользователь не авторизован (например Mini App без localStorage)
     const twa = window.Telegram?.WebApp;
-    if(twa){
+    if(twa && typeof twa.showAlert==='function'){
       twa.showAlert("Войдите в аккаунт на сайте autopost26.up.railway.app, а затем откройте уведомления снова.");
     } else {
       toast("Не удалось определить аккаунт. Попробуйте войти заново.","err");
@@ -2182,26 +2182,99 @@ function initKeyboardDismiss(){
 }
 
 // BOOT
+// ── Telegram SDK: асинхронная, не блокирующая загрузка (P0 fix) ──────
+// Раньше SDK подключался блокирующим <script> тегом в index.html ДО
+// app.js — при медленном/недоступном telegram.org это держало весь boot
+// до 15-20 секунд. Теперь SDK грузится программно, параллельно с
+// остальной загрузкой приложения, с явным таймаутом, и НИКОГДА не
+// блокирует boot()/auth/quick start/channel list (task items 1-3, 6, 8).
+const TELEGRAM_SDK_TIMEOUT_MS = 1800;
+let _telegramSdkPromise = null;
+
+function loadTelegramSdkAsync(){
+  if(_telegramSdkPromise) return _telegramSdkPromise;
+  try{ performance.mark('telegram_sdk_started'); }catch(_){}
+  console.log('[timing] telegram_sdk_started');
+
+  _telegramSdkPromise = new Promise((resolve)=>{
+    // Уже загружен (например повторный вызов после первого успеха).
+    if(window.Telegram?.WebApp){
+      resolve(true);
+      return;
+    }
+    let settled=false;
+    const finish=(ok)=>{
+      if(settled) return;
+      settled=true;
+      resolve(ok);
+    };
+
+    const timer=setTimeout(()=>{
+      try{ performance.mark('telegram_sdk_failed_or_timeout'); }catch(_){}
+      console.log(`[timing] telegram_sdk_failed_or_timeout (>${TELEGRAM_SDK_TIMEOUT_MS}ms)`);
+      finish(false);
+    }, TELEGRAM_SDK_TIMEOUT_MS);
+
+    const script=document.createElement('script');
+    script.src='https://telegram.org/js/telegram-web-app.js';
+    script.async=true;
+    script.onload=()=>{
+      clearTimeout(timer);
+      try{ performance.mark('telegram_sdk_loaded'); }catch(_){}
+      console.log('[timing] telegram_sdk_loaded');
+      finish(true);
+    };
+    script.onerror=()=>{
+      clearTimeout(timer);
+      try{ performance.mark('telegram_sdk_failed_or_timeout'); }catch(_){}
+      console.log('[timing] telegram_sdk_failed_or_timeout (onerror)');
+      finish(false);
+    };
+    document.head.appendChild(script);
+  });
+
+  return _telegramSdkPromise;
+}
+
 function initTelegram(){
+  // Guarded (task item 4-5): если SDK недоступен — тихо работаем как
+  // обычное браузерное приложение, никогда не падаем и не блокируем boot.
   const tg=window.Telegram?.WebApp;
   if(!tg) return;
   try{
-    tg.ready();
-    tg.expand();                       // на весь экран
-    if(tg.setHeaderColor) tg.setHeaderColor("#f5f1ea");
-    if(tg.setBackgroundColor) tg.setBackgroundColor("#f5f1ea");
-    if(tg.disableVerticalSwipes) tg.disableVerticalSwipes(); // не закрывать свайпом случайно
+    if(typeof tg.ready==='function') tg.ready();
+    if(typeof tg.expand==='function') tg.expand();           // на весь экран
+    if(typeof tg.setHeaderColor==='function') tg.setHeaderColor("#f5f1ea");
+    if(typeof tg.setBackgroundColor==='function') tg.setBackgroundColor("#f5f1ea");
+    if(typeof tg.disableVerticalSwipes==='function') tg.disableVerticalSwipes(); // не закрывать свайпом случайно
   }catch(_){}
 }
 
+// Запускаем загрузку SDK не дожидаясь её — если успеет загрузиться,
+// initTelegram() вызовется повторно и безопасно доинициализирует
+// Telegram-специфичные фичи. Если не успеет/упадёт — приложение уже
+// полностью работает в обычном web-режиме, ничего не теряет.
+function initTelegramAsync(){
+  loadTelegramSdkAsync().then((ok)=>{
+    if(ok) initTelegram();
+  });
+}
+
 async function boot(){
-  // Timing instrumentation (task item 4): измеряем каждый этап загрузки,
-  // не меняя логику, чтобы понять где реально уходит 15-20 секунд —
-  // backend cold start, /me, /channels, или что-то другое.
+  // Timing instrumentation (task item 4 + 7): измеряем каждый этап загрузки.
+  try{ performance.mark('app_js_started'); }catch(_){}
+  try{ performance.mark('boot_started'); }catch(_){}
   const t0 = performance.now();
   console.log(`[timing] boot() start, since navigation: ${t0.toFixed(0)}ms`);
 
-  initTelegram();
+  // КРИТИЧНО (P0 fix): Telegram SDK теперь грузится асинхронно и НЕ
+  // блокирует ничего ниже — init запускается в фоне, boot() идёт дальше
+  // не дожидаясь её. Раньше SDK был синхронным <script> тегом в HTML
+  // ДО app.js, что при недоступности telegram.org держало весь boot до
+  // 15-20 секунд (см. acceptance tests B/C в задаче).
+  initTelegramAsync();
+  initTelegram(); // если SDK уже был закэширован браузером — сработает сразу, без вреда если его ещё нет
+
   captureLandingSession();
 
   const tConfigStart = performance.now();
@@ -2211,16 +2284,27 @@ async function boot(){
   initCookieBanner();initKeyboardDismiss();
   if(!App.token){
     console.log(`[timing] boot() total (no token, -> renderAuth): ${(performance.now()-t0).toFixed(0)}ms`);
-    return renderAuth();
+    renderAuth();
+    try{ performance.mark('first_screen_visible'); performance.mark('boot_complete'); }catch(_){}
+    console.log('[timing] first_screen_visible (renderAuth)');
+    return;
   }
 
+  try{ performance.mark('me_request_started'); }catch(_){}
   const tMeStart = performance.now();
   try{
     App.user=await api("GET","/me");
+    try{ performance.mark('me_request_finished'); }catch(_){}
     console.log(`[timing] /me: ${(performance.now()-tMeStart).toFixed(0)}ms`);
+
+    try{ performance.mark('channels_request_started'); }catch(_){}
     const tRouteStart = performance.now();
     await go("dashboard");
+    try{ performance.mark('channels_request_finished'); }catch(_){}
     console.log(`[timing] go('dashboard') incl. /channels + render: ${(performance.now()-tRouteStart).toFixed(0)}ms`);
+
+    try{ performance.mark('first_screen_visible'); }catch(_){}
+    console.log('[timing] first_screen_visible (dashboard)');
   }catch(e){
     console.log(`[timing] /me failed after ${(performance.now()-tMeStart).toFixed(0)}ms: ${e&&e.message}`);
     // КРИТИЧНО (P0 fix, acceptance test C/D): logout() должен срабатывать
@@ -2251,7 +2335,10 @@ async function boot(){
         <button class="btn" style="margin-top:12px" onclick="boot()">Попробовать снова</button>
       </div>`;
     }
+    try{ performance.mark('first_screen_visible'); }catch(_){}
+    console.log('[timing] first_screen_visible (error fallback)');
   }
+  try{ performance.mark('boot_complete'); }catch(_){}
   console.log(`[timing] boot() total: ${(performance.now()-t0).toFixed(0)}ms`);
 }
 
