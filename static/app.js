@@ -308,8 +308,10 @@ let _ncVoice="author",_ncFormat="story",_ncEmoji="minimal",_ncCta=false,_ncCtaTe
 
 // QUICK START — минимальный онбординг: тема -> первый пост, без подключения канала
 function renderQuickStart(){
+  trackGoal("quick_start_viewed");
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
-    <div class="page-head" style="text-align:center;margin-top:24px">
+    <button class="back-link" style="margin-top:12px" onclick="go('dashboard')">← Все каналы</button>
+    <div class="page-head" style="text-align:center;margin-top:8px">
       <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">О чём сделать первый пост?</h1>
       <p style="color:var(--text-dim)">Канал можно подключить позже — сначала покажем пример поста.</p>
     </div>
@@ -325,8 +327,32 @@ function renderQuickStart(){
 async function qsGenerate(){
   const about=($("qs_about").value||"").trim();
   if(!about) return toast("Опишите тему","err");
+  trackGoal("quick_start_submitted",{topic:about});
   const btn=$("qs_btn");
-  btn.innerHTML='<span class="spinner"></span> Пишу пост…';btn.disabled=true;
+  btn.innerHTML='<span class="spinner"></span> Проверяю тему…';btn.disabled=true;
+
+  // КРИТИЧНО (фикс по итогам ревью): валидируем тему ДО создания канала.
+  // Раньше Channel создавался первым, а классификация происходила только
+  // внутри /generate — из-за этого неподходящая тема всё равно попадала
+  // в dashboard/settings как уже существующий канал. Этот вызов не создаёт
+  // ничего в БД, поэтому при отказе канал просто не появляется.
+  let validation;
+  try{
+    validation=await api("POST","/validate-topic",{topic:about});
+  }catch(e){
+    // Сбой самой проверки — не продолжаем генерацию (см. задачу: classify_topic
+    // должен иметь safe fallback, который блокирует, а не пропускает молча).
+    toast("Не удалось проверить тему. Попробуйте переформулировать.","err");
+    btn.innerHTML="Сгенерировать пост";btn.disabled=false;
+    return;
+  }
+  if(!validation.ok){
+    toast(validation.message||"Не понял тему. Напишите проще.","err");
+    btn.innerHTML="Сгенерировать пост";btn.disabled=false;
+    return;
+  }
+
+  btn.innerHTML='<span class="spinner"></span> Пишу пост…';
 
   // Заголовок канала — авто, из темы (первые слова), пользователь сможет
   // переименовать позже в настройках. Не спрашиваем его сейчас намеренно —
@@ -346,6 +372,7 @@ async function qsGenerate(){
     return;
   }
   App.channelId=chan.id;
+  trackGoal("first_post_generation_started",{channel_id:chan.id});
 
   let post;
   try{
@@ -356,15 +383,26 @@ async function qsGenerate(){
     const looksWrong = !post.text || post.text.trim().length < 60
       || /^(what|please|sorry|i\s|let me|could you)/i.test(post.text.trim());
     if(looksWrong){
+      trackGoal("first_post_generation_failed",{channel_id:chan.id,reason:"looks_wrong"});
+      // Тема уже была одобрена validate-topic, значит это сбой генерации
+      // (например web_search не нашёл фактов), а не проблема с темой как
+      // таковой — поэтому канал НЕ удаляем, просто сообщаем об ошибке.
+      // Пользователь может нажать "Сгенерировать пост" ещё раз для той же темы.
       toast("Не получилось найти свежий факт по этой теме. Попробуйте уточнить тему — например: «новости M&A в России».","err");
       btn.innerHTML="Сгенерировать пост";btn.disabled=false;
       return;
     }
   }catch(e){
     const errMsg=(e&&e.message)||"";
-    const human=errMsg.toLowerCase().includes("токен")||errMsg.toLowerCase().includes("баланс")
+    const isTokenIssue=errMsg.toLowerCase().includes("токен")||errMsg.toLowerCase().includes("баланс");
+    trackGoal("first_post_generation_failed",{channel_id:chan.id,reason:errMsg});
+    // Backend уже возвращает готовый русский текст для отклонённых тем
+    // (unclear/adult/unsafe — см. tasks.generate_for_channel) и для других
+    // ошибок генерации. Показываем его как есть, не подменяем дженериком —
+    // иначе пользователь не узнает что именно с темой не так.
+    const human=isTokenIssue
       ? "Закончились пробные посты. Пополни баланс в разделе «Тарифы»."
-      : "Не удалось сгенерировать пост. Попробуй ещё раз.";
+      : (errMsg || "Не удалось сгенерировать пост. Попробуй ещё раз.");
     toast(human,"err");
     btn.innerHTML="Сгенерировать пост";btn.disabled=false;
     return;
@@ -387,7 +425,7 @@ function renderFirstPostResult(channelId, post, about){
     <div class="card" style="font-size:15px;line-height:1.7" id="fp_text">${renderTg(post.text)}</div>
 
     <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
-      onclick="go('connect_channel',${channelId})">Подключить канал и опубликовать</button>
+      onclick="go('connect_channel',${channelId})">Подключить Telegram-канал</button>
 
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;justify-content:center">
       <button class="btn-outline btn-sm" onclick="qsRegenerate(${channelId})" id="fp_regen_btn">Ещё вариант</button>
@@ -449,8 +487,11 @@ async function renderConnectChannel(){
   App._chan=c;
   const botUsername=App.cfg?.bot_username||"Trpst_bot";
 
+  trackGoal("connect_channel_started",{channel_id:c.id});
+
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
-    <div class="page-head" style="text-align:center;margin-top:16px">
+    <button class="back-link" style="margin-top:12px" onclick="go('channel',${c.id})">← Назад</button>
+    <div class="page-head" style="text-align:center;margin-top:8px">
       <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Подключите Telegram-канал</h1>
       <p style="color:var(--text-dim)">Чтобы АвтоПост мог публиковать посты, добавьте бота-публикатора администратором канала.</p>
     </div>
@@ -475,7 +516,7 @@ async function renderConnectChannel(){
     <div id="cc_msg" style="font-size:13px;margin-top:6px;min-height:18px"></div>
 
     <button class="btn" style="width:100%;justify-content:center;margin-top:12px;padding:14px"
-      onclick="ccVerify()" id="cc_verify_btn">Я добавил, проверить</button>
+      onclick="ccVerify()" id="cc_verify_btn">Проверить подключение</button>
 
     <button class="btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:10px;color:var(--text-faint)"
       onclick="go('channel',${c.id})">Подключу позже →</button>
@@ -491,80 +532,167 @@ function ccCopyBot(username){
   if(btn){const orig=btn.textContent;btn.textContent="✓ Скопировано";setTimeout(()=>{btn.textContent=orig;},1500);}
 }
 
+// Универсальная обёртка с реальным таймаутом (не просто текст-подсказка) —
+// если промис не резолвится за timeoutMs, кнопка гарантированно
+// разблокируется с понятным сообщением, вместо вечного spinner (task: "Fix
+// loading / stuck button").
+function withTimeout(promise, timeoutMs, timeoutMessage){
+  let timedOut=false;
+  const timeout=new Promise((_,reject)=>{
+    setTimeout(()=>{timedOut=true;reject(new Error(timeoutMessage));},timeoutMs);
+  });
+  return Promise.race([promise, timeout]).then(
+    result=>({timedOut:false, result}),
+    err=>{ if(timedOut) return {timedOut:true, error:err}; throw err; }
+  );
+}
+
 async function ccVerify(){
-  const chat=($("cc_chat")||{value:""}).value.trim();
-  if(!chat) return toast("Введите @username или ссылку на канал","err");
+  const chatRaw=($("cc_chat")||{value:""}).value.trim();
+  if(!chatRaw) return toast("Введите @username или ссылку на канал","err");
   const btn=$("cc_verify_btn"),msg=$("cc_msg");
   btn.innerHTML='<span class="spinner"></span> Проверяем канал…';btn.disabled=true;
   if(msg){msg.textContent="";}
 
-  // Если процесс идёт дольше 12 секунд — объясняем, не оставляем вечный spinner.
-  const slowTimer=setTimeout(()=>{
-    if(msg) msg.innerHTML='<span style="color:var(--text-faint)">Публикация занимает больше времени обычного. Можно подождать или вернуться позже.</span>';
-  },12000);
+  trackGoal("channel_verify_started",{channel_id:App.channelId,channel_input_raw:chatRaw});
 
-  try{
-    await api("PATCH","/channels/"+App.channelId,{tg_chat:chat});
-    const r=await api("POST","/channels/"+App.channelId+"/verify");
-    if(r.ok){
-      // activation_2: канал успешно подключён
-      trackGoal("channel_connected",{channel_id:App.channelId});
-      logLandingEventWeb("channel_connected");
-      btn.innerHTML='<span class="spinner"></span> Публикуем первый пост…';
-      if(msg) msg.textContent="";
-      await ccPublishFirstPost(chat);
-    } else {
-      clearTimeout(slowTimer);
-      if(msg){msg.textContent=r.message;msg.style.color="var(--red)";}
-      btn.innerHTML="Я добавил, проверить";btn.disabled=false;
-    }
-  }catch(e){
-    clearTimeout(slowTimer);
-    if(msg){msg.textContent=e.message||"Не удалось проверить канал";msg.style.color="var(--red)";}
-    btn.innerHTML="Я добавил, проверить";btn.disabled=false;
-  }finally{
-    clearTimeout(slowTimer);
+  const TIMEOUT_MS=18000;
+  const TIMEOUT_MSG="Операция занимает больше времени обычного. Попробуйте ещё раз или вернитесь позже.";
+
+  const {timedOut, result, error} = await withTimeout((async()=>{
+    await api("PATCH","/channels/"+App.channelId,{tg_chat:chatRaw});
+    return await api("POST","/channels/"+App.channelId+"/verify");
+  })(), TIMEOUT_MS, TIMEOUT_MSG);
+
+  if(timedOut){
+    trackGoal("publish_button_loading_timeout",{channel_id:App.channelId,stage:"verify"});
+    if(msg){msg.textContent=TIMEOUT_MSG;msg.style.color="var(--accent-dark)";}
+    btn.innerHTML="Проверить подключение";btn.disabled=false;
+    return;
+  }
+  if(error){
+    trackGoal("channel_verify_failed",{channel_id:App.channelId,reason:"exception"});
+    if(msg){msg.textContent=error.message||"Не удалось проверить канал";msg.style.color="var(--red)";}
+    btn.innerHTML="Проверить подключение";btn.disabled=false;
+    return;
+  }
+
+  const r=result;
+  if(r.ok){
+    // activation_2: канал успешно подключён. ВАЖНО: подключение канала и
+    // публикация поста — два разных шага (см. задачу), здесь НЕ публикуем
+    // автоматически. Показываем экран подтверждения, решение — на пользователе.
+    trackGoal("channel_connected",{channel_id:App.channelId});
+    trackGoal("channel_verify_success",{channel_id:App.channelId});
+    logLandingEventWeb("channel_connected");
+    renderPublishConfirm(App.channelId, chatRaw);
+  } else {
+    trackGoal("channel_verify_failed",{channel_id:App.channelId,reason:r.message});
+    if(msg){msg.textContent=r.message;msg.style.color="var(--red)";}
+    btn.innerHTML="Проверить подключение";btn.disabled=false;
   }
 }
 
-async function ccPublishFirstPost(tgChat){
-  // После подключения канала публикуем первый сгенерированный пост,
-  // который сейчас лежит в очереди со статусом pending.
-  let publishedPostId=null;
-  try{
-    const posts=await api("GET",`/channels/${App.channelId}/posts`);
-    const pending=(posts||[]).find(p=>p.status==="pending"||p.status==="onboarding");
-    if(pending){
-      await api("POST",`/posts/${pending.id}/publish`);
-      publishedPostId=pending.id;
-      // activation_3: первый пост реально опубликован в канал
-      trackGoal("first_post_published",{channel_id:App.channelId});
-      logLandingEventWeb("first_post_published");
-    }
-  }catch(e){
-    // Не блокируем переход даже если публикация не удалась —
-    // пользователь увидит статус поста в очереди и сможет опубликовать вручную.
+// Step 5: экран подтверждения публикации — отдельный явный шаг, не
+// автоматическое следствие успешной верификации (ключевой инвариант задачи:
+// "Подключение канала ≠ публикация поста").
+async function renderPublishConfirm(channelId, tgChat){
+  let posts=[];
+  try{posts=await api("GET",`/channels/${channelId}/posts`);}catch(e){}
+  const pending=(posts||[]).find(p=>p.status==="pending"||p.status==="onboarding");
+
+  trackGoal("publish_confirm_screen_shown",{channel_id:channelId});
+
+  if(!$("app")) return;
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <div class="page-head" style="text-align:center;margin-top:24px">
+      <div style="font-size:36px;margin-bottom:6px">✅</div>
+      <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Канал подключён</h1>
+      <p style="color:var(--text-dim)">Первый пост готов. Опубликовать его сейчас?</p>
+    </div>
+    ${pending?`<div class="card" style="font-size:14px;line-height:1.6;max-height:200px;overflow:hidden;position:relative">
+      ${renderTg(pending.text)}
+      <div style="position:absolute;bottom:0;left:0;right:0;height:50px;background:linear-gradient(transparent,var(--surface))"></div>
+    </div>`:`<div class="hint">Постов в очереди нет — можно создать новый из карточки канала.</div>`}
+
+    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+      onclick="ccConfirmPublish(${channelId},${pending?pending.id:"null"},'${esc(tgChat)}')"
+      id="cpc_publish_btn" ${pending?"":"disabled"}>Опубликовать сейчас</button>
+
+    <div style="display:flex;gap:8px;margin-top:10px">
+      <button class="btn-outline btn-sm" style="flex:1" onclick="go('channel',${channelId})">Оставить на проверке</button>
+      <button class="btn-outline btn-sm" style="flex:1" onclick="ccGoSchedule(${channelId},${pending?pending.id:"null"})" ${pending?"":"disabled"}>Запланировать</button>
+    </div>
+  </div>`;
+}
+
+function ccGoSchedule(channelId, postId){
+  // "Запланировать" — ведём в карточку канала, там уже есть полноценный
+  // datetime-picker для постов (showPicker/doSchedule). Не дублируем здесь.
+  go("channel", channelId);
+  if(postId) setTimeout(()=>{ if(typeof showPicker==="function") showPicker(postId); },300);
+}
+
+async function ccConfirmPublish(channelId, postId, tgChat){
+  if(!postId) return;
+  const btn=$("cpc_publish_btn");
+  btn.innerHTML='<span class="spinner"></span> Публикуем…';btn.disabled=true;
+
+  trackGoal("first_post_publish_started",{
+    channel_id:channelId, post_id:postId,
+    was_publish_explicitly_confirmed:true,
+    auto_publish_without_review:App._chan?.auto_publish||false,
+  });
+
+  const TIMEOUT_MS=18000;
+  const TIMEOUT_MSG="Публикация занимает больше времени обычного. Попробуйте ещё раз или вернитесь позже.";
+
+  const {timedOut, error} = await withTimeout(
+    api("POST",`/posts/${postId}/publish`), TIMEOUT_MS, TIMEOUT_MSG
+  );
+
+  if(timedOut){
+    trackGoal("publish_button_loading_timeout",{channel_id:channelId,stage:"publish"});
+    toast(TIMEOUT_MSG,"err");
+    btn.innerHTML="Опубликовать сейчас";btn.disabled=false;
+    return;
   }
-  renderPublishSuccess(App.channelId, tgChat, publishedPostId);
+  if(error){
+    trackGoal("first_post_publish_failed",{channel_id:channelId,reason:error.message});
+    toast(error.message||"Не удалось опубликовать пост","err");
+    btn.innerHTML="Опубликовать сейчас";btn.disabled=false;
+    return;
+  }
+
+  // activation_3 + success_screen: публикация подтверждена явно пользователем.
+  // already_published=true означает что предыдущая попытка (например после
+  // ложного timeout) на самом деле успела опубликовать пост на backend —
+  // показываем success так же, без дублирования сообщения в канале
+  // (publish_post на backend идемпотентен).
+  trackGoal("first_post_published",{channel_id:channelId});
+  trackGoal("first_post_publish_success",{channel_id:channelId});
+  logLandingEventWeb("first_post_published");
+  renderPublishSuccess(channelId, tgChat, postId);
 }
 
 function renderPublishSuccess(channelId, tgChat, postId){
-  const chatLabel = (tgChat||"").replace(/^https?:\/\/t\.me\//,"@").replace(/^@?/,"@");
-  const tgUrl = postId
-    ? `https://t.me/${chatLabel.replace(/^@/,"")}`
-    : `https://t.me/${chatLabel.replace(/^@/,"")}`;
+  const chatLabel = (tgChat||"").replace(/^https?:\/\/t\.me\//i,"").replace(/^@/,"");
+  const tgUrl = `https://t.me/${chatLabel}`;
+  trackGoal("success_screen_shown",{channel_id:channelId});
+
+  if(!$("app")) return;
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <div class="page-head" style="text-align:center;margin-top:32px">
       <div style="font-size:40px;margin-bottom:8px">✅</div>
       <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Готово — пост опубликован</h1>
-      <p style="color:var(--text-dim)">Первый пост опубликован в канале ${esc(chatLabel)}</p>
+      <p style="color:var(--text-dim)">Пост опубликован в канале @${esc(chatLabel)}</p>
     </div>
     <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
       onclick="window.open('${tgUrl}','_blank')">Открыть пост в Telegram</button>
     <button class="btn-outline btn-sm" style="width:100%;justify-content:center;margin-top:10px"
       onclick="go('new_channel')">Создать следующий пост</button>
     <button class="btn-ghost btn-sm" style="width:100%;justify-content:center;margin-top:8px;color:var(--text-faint)"
-      onclick="go('channel',${channelId})">Перейти в очередь</button>
+      onclick="trackGoal('queue_opened',{channel_id:${channelId}});go('channel',${channelId})">Перейти в очередь</button>
   </div>`;
 }
 
@@ -924,6 +1052,7 @@ async function renderChannel(){
             ${c.tg_chat?`<span class="chip chip-gray" style="font-family:monospace">${esc(c.tg_chat)}</span>`:""}
           </div>
           ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:8px;max-width:500px">${esc(c.about)}</p>`:""}
+          ${c.enabled?`<p style="font-size:13px;color:var(--blue);margin-top:6px;font-weight:500">⏱ Следующий пост ${_nextTimeLabel(c)}</p>`:""}
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
@@ -988,47 +1117,55 @@ function renderPostCard(p, pubMs, channelEnabled){
   const editable=p.status==="pending"||p.status==="onboarding";
   const sched=p.status==="scheduled";
   const isPaused=channelEnabled===false;
+  const isFailed=p.status==="failed"; // заготовка — backend пока не выставляет этот статус (см. ниже)
 
-  // ── Один главный визуальный индикатор статуса (task item 7) ──────────
-  // Не текстовый чип "на проверке" / "запланирован", а заметный pill,
-  // который меняет смысл по статусу: таймер для scheduled, "ждёт
-  // подтверждения" для pending, "ошибка" для failed, "опубликован" для published.
-  let statusPill="";
+  // ── Один главный визуальный индикатор статуса ─────────────────────────
+  // Важно (по новой точной спецификации): для scheduled синим показываем
+  // ТОЛЬКО живой countdown, а дату/время — отдельной серой строкой ниже.
+  // Раньше дата была частью того же синего pill — это неправильно по задаче.
+  let statusPill="", subLine="";
   if(p.status==="published"){
     const ts=p.published_at?new Date(p.published_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"}):"";
-    statusPill=`<div class="status-pill status-pill-green">✅ Опубликован${ts?" · "+ts:""}</div>`;
-  } else if(p.status==="failed"){
-    // Заготовка под статус "ошибка публикации" — сейчас backend не
+    statusPill=`<div class="status-pill status-pill-green">Опубликован</div>`;
+    if(ts) subLine=`<div class="status-subline">Опубликован ${ts}</div>`;
+  } else if(isFailed){
+    // Заготовка под статус "ошибка публикации" — backend сейчас не
     // устанавливает Post.status="failed" ни в одном сценарии (ошибки
-    // публикации сейчас остаются в статусе pending/scheduled с уведомлением
-    // через бота). Индикатор готов к моменту когда такой статус появится,
-    // без добавления нового статуса в БД прямо сейчас.
-    statusPill=`<div class="status-pill status-pill-red">⚠️ Ошибка публикации</div>`;
+    // публикации остаются в pending/scheduled с уведомлением через бота).
+    // Индикатор готов к моменту когда такой статус появится.
+    statusPill=`<div class="status-pill status-pill-red">Ошибка публикации</div>`;
+    if(p.publish_error) subLine=`<div class="status-subline" style="color:var(--red)">${esc(p.publish_error)}</div>`;
   } else if(p.status==="rejected"){
     statusPill=`<div class="status-pill status-pill-gray">Удалён</div>`;
   } else if(isPaused){
-    statusPill=`<div class="status-pill status-pill-gray">⏸ На паузе</div>`;
+    statusPill=`<div class="status-pill status-pill-gray">На паузе</div>`;
   } else if(sched && p.scheduled_at){
     const sd=new Date(p.scheduled_at+"Z");const diff=sd-Date.now();
-    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
+    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000),sec=Math.floor((diff%60000)/1000);
+    const countdown=diff>0?(h>0?`через ${h}ч ${m}м`:`через ${m}:${String(sec).padStart(2,"0")}`):"скоро";
     const ts=sd.toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-    const label=diff>0?(h>0?`Через ${h}ч ${m}м`:`Через ${m}мин`):"Скоро";
-    statusPill=`<div class="status-pill status-pill-blue">⏱ ${label} · ${ts}</div>`;
+    statusPill=`<div class="status-pill status-pill-blue" id="countdown_${p.id}" data-target-ms="${sd.getTime()}">⏱ ${countdown}</div>`;
+    subLine=`<div class="status-subline">Опубликуется ${ts}</div>`;
   } else if(editable && pubMs && App._chan?.auto_publish){
     const diff=pubMs-Date.now();
     const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000);
+    const countdown=diff>0?(h>0?`через ${h}ч ${m}м`:`через ${m}мин`):"скоро";
     const ts=new Date(pubMs).toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-    const label=diff>0?(h>0?`Через ${h}ч ${m}м`:`Через ${m}мин`):"Скоро";
-    statusPill=`<div class="status-pill status-pill-blue">⏱ ${label} · ${ts}</div>`;
+    statusPill=`<div class="status-pill status-pill-blue" id="countdown_${p.id}" data-target-ms="${pubMs}">⏱ ${countdown}</div>`;
+    subLine=`<div class="status-subline">Опубликуется ${ts}</div>`;
   } else if(editable){
-    statusPill=`<div class="status-pill status-pill-yellow">🟡 Ждёт вашего подтверждения</div>`;
+    statusPill=`<div class="status-pill status-pill-yellow">Ждёт вашего подтверждения</div>`;
+    const created=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
+    subLine=`<div class="status-subline">Создан ${created}</div>`;
   }
 
-  const when=new Date(p.created_at+"Z").toLocaleString("ru-RU",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
-
-  // ── Кнопки: одна главная + одна вторичная, остальное в меню "..." (task item 8) ──
+  // ── Кнопки: одна primary + один secondary, остальное в меню "..." ────
   let primaryBtn="", secondaryBtn="", menuItems="";
-  if(editable){
+  if(isFailed){
+    primaryBtn=`<button class="btn btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Исправить</button>`;
+    secondaryBtn=`<button class="btn-outline btn-sm" onclick="publishPost(${p.id})">Повторить</button>`;
+    menuItems=`<button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});deletePost(${p.id})">Удалить</button>`;
+  } else if(editable){
     primaryBtn=`<button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">Опубликовать сейчас</button>`;
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     menuItems=`
@@ -1038,7 +1175,15 @@ function renderPostCard(p, pubMs, channelEnabled){
   } else if(sched){
     primaryBtn=`<button class="btn-outline btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="publishPost(${p.id})">Опубликовать сейчас</button>`;
-    menuItems=`<button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Снять с расписания</button>`;
+    menuItems=`
+      <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">📅 Перенести</button>
+      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>`;
+  } else if(p.status==="published"){
+    const chatLabel=(App._chan?.tg_chat||"").replace(/^https?:\/\/t\.me\//i,"").replace(/^@/,"");
+    const tgUrl=p.tg_message_id&&chatLabel?`https://t.me/${chatLabel}/${p.tg_message_id}`:`https://t.me/${chatLabel}`;
+    primaryBtn=`<button class="btn-outline btn-sm" onclick="window.open('${tgUrl}','_blank')">Открыть в Telegram</button>`;
+    secondaryBtn=`<button class="btn-ghost btn-sm" onclick="regenPost(${p.id})">Создать похожий</button>`;
+    menuItems=`<button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});deletePost(${p.id})">Удалить из списка</button>`;
   } else {
     menuItems=`<button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});deletePost(${p.id})">Удалить</button>`;
   }
@@ -1050,14 +1195,12 @@ function renderPostCard(p, pubMs, channelEnabled){
 
   return `<div class="post-card" id="pc_${p.id}">
     ${statusPill}
-    <div class="post-header" style="margin-top:8px">
-      <span class="text-faint mono" style="font-size:11px">${when}</span>
-    </div>
+    ${subLine}
     <div id="ppreview_${p.id}" style="position:relative">
       <div id="pb_${p.id}" class="post-body post-preview-short" style="margin-top:8px">${renderTg(p.text)}</div>
       <button id="pexp_${p.id}" class="expand-btn" onclick="toggleExpand(${p.id})">Читать полностью ↓</button>
     </div>
-    ${(editable||sched)?`<textarea id="pt_${p.id}" class="post-body hidden" style="width:100%;min-height:120px;margin-top:8px">${esc(p.text)}</textarea>`:""}
+    ${(editable||sched||isFailed)?`<textarea id="pt_${p.id}" class="post-body hidden" style="width:100%;min-height:120px;margin-top:8px">${esc(p.text)}</textarea>`:""}
     <div id="picker_${p.id}" class="hidden" style="margin-top:10px;padding:12px;background:var(--surface2);border-radius:10px;border:1px solid var(--border-soft)">
       <div class="field-label" style="margin-bottom:6px">Дата и время (UTC)</div>
       <div class="row" style="gap:8px">
@@ -1071,6 +1214,37 @@ function renderPostCard(p, pubMs, channelEnabled){
       <button class="btn-ghost btn-sm hidden" id="save_${p.id}" onclick="savePost(${p.id})">💾 Сохранить</button>
       ${menuBtn}
     </div></div>`;
+}
+
+// Живой countdown с секундами для ближайшего scheduled/auto-publish поста
+// (первая карточка с countdown_ — по построению ближайшая по времени, см.
+// renderQueue). Остальные карточки обновляются раз в минуту через обычный
+// re-render всей очереди — не перегружаем UI частыми перерисовками.
+let _countdownTimer=null, _countdownTargetMs=null, _countdownPostId=null;
+
+function startNearestCountdown(){
+  if(_countdownTimer){clearInterval(_countdownTimer);_countdownTimer=null;}
+  const el=document.querySelector('[id^="countdown_"]');
+  if(!el) return;
+  _countdownPostId=el.id.replace("countdown_","");
+  _countdownTargetMs=parseInt(el.dataset.targetMs||"0",10);
+  if(!_countdownTargetMs) return;
+
+  _countdownTimer=setInterval(()=>{
+    const liveEl=$(`countdown_${_countdownPostId}`);
+    if(!liveEl){clearInterval(_countdownTimer);_countdownTimer=null;return;}
+    const diff=_countdownTargetMs-Date.now();
+    if(diff<=0){
+      liveEl.textContent="⏱ скоро";
+      clearInterval(_countdownTimer);_countdownTimer=null;
+      // Время публикации подошло — обновляем всю очередь чтобы подхватить
+      // реальный статус с backend (auto-publish тикает на сервере).
+      setTimeout(()=>{ if(App.tab==="queue") renderQueue(); },3000);
+      return;
+    }
+    const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000),sec=Math.floor((diff%60000)/1000);
+    liveEl.textContent=h>0?`⏱ через ${h}ч ${m}м`:`⏱ через ${m}:${String(sec).padStart(2,"0")}`;
+  },1000);
 }
 
 function togglePostMenu(postId){
@@ -1137,6 +1311,7 @@ async function renderQueue(){
     </div>`;
   }
   $("postList").innerHTML=html;
+  startNearestCountdown();
 }
 
 
@@ -1151,10 +1326,9 @@ function renderSettings(){
         <input id="f_title" value="${esc(c.title)}"></label>
       <label class="field mt"><span class="field-label">@username, ссылка t.me/ или ID</span>
         ${c.verified
-          ? `<div style="display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--green-bg);border-radius:10px;margin-bottom:6px">
-               <span style="color:var(--green);font-weight:600">✓ Проверено</span>
-               <span style="font-family:monospace;font-size:13px;color:var(--text-dim)">${esc(c.tg_chat)}</span>
-               <button class="btn-ghost btn-sm" onclick="showVerifyInput()" style="margin-left:auto;font-size:12px">Изменить</button>
+          ? `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:var(--green-bg);border-radius:10px;margin-bottom:6px;flex-wrap:nowrap;overflow:hidden">
+               <span style="color:var(--green);font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">✓ Проверено · ${esc(c.tg_chat)}</span>
+               <button class="btn-ghost btn-sm" onclick="showVerifyInput()" style="flex-shrink:0;font-size:12px">Изменить</button>
              </div>
              <div id="verifyInputBlock" class="hidden">
                <div class="row" style="gap:8px">

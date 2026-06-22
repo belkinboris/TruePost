@@ -160,6 +160,8 @@ label.field + label.field { margin-top: 16px; }
 .status-pill-blue { background: var(--blue-bg); color: var(--blue); }
 .status-pill-yellow { background: var(--accent-soft); color: var(--accent-dark); }
 
+.status-subline { font-size: 12px; color: var(--text-faint); margin-top: 4px; }
+
 /* ── Post card "..." menu ────────────────────────────────────── */
 .post-menu { position: absolute; right: 0; top: 100%; margin-top: 4px; z-index: 10;
   background: var(--surface); border: 1px solid var(--border-soft); border-radius: 10px;
