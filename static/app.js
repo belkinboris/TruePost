@@ -633,6 +633,24 @@ function ccGoSchedule(channelId, postId){
   if(postId) setTimeout(()=>{ if(typeof showPicker==="function") showPicker(postId); },300);
 }
 
+// Опрашивает статус поста с коротким интервалом до подтверждения публикации
+// или до истечения maxWaitMs. Используется после ложного timeout публикации,
+// чтобы не показывать ошибку если Telegram-сторона на самом деле уже успешна
+// (P0 fix item 1).
+async function pollPostStatus(postId, maxWaitMs=20000, intervalMs=2000){
+  const deadline=Date.now()+maxWaitMs;
+  while(Date.now()<deadline){
+    try{
+      const status=await api("GET",`/posts/${postId}/status`);
+      if(status.status==="published") return {confirmed:true, status};
+    }catch(e){
+      // Сетевая ошибка при опросе статуса — пробуем ещё раз, не сдаёмся сразу.
+    }
+    await new Promise(r=>setTimeout(r,intervalMs));
+  }
+  return {confirmed:false, status:null};
+}
+
 async function ccConfirmPublish(channelId, postId, tgChat){
   if(!postId) return;
   const btn=$("cpc_publish_btn");
@@ -645,20 +663,36 @@ async function ccConfirmPublish(channelId, postId, tgChat){
   });
 
   const TIMEOUT_MS=18000;
-  const TIMEOUT_MSG="Публикация занимает больше времени обычного. Попробуйте ещё раз или вернитесь позже.";
+  const TIMEOUT_MSG="Публикация занимает больше времени обычного. Проверяем статус. Не нажимайте повторно, чтобы не создать дубль.";
 
   const {timedOut, error} = await withTimeout(
     api("POST",`/posts/${postId}/publish`), TIMEOUT_MS, TIMEOUT_MSG
   );
 
   if(timedOut){
-    trackGoal("publish_button_loading_timeout",{channel_id:channelId,stage:"publish"});
-    toast(TIMEOUT_MSG,"err");
+    // КРИТИЧНО (P0 fix): не показываем ошибку сразу. HTTP-запрос мог
+    // зависнуть на фронте (медленная сеть, мобильное соединение), при этом
+    // backend мог успешно опубликовать пост в Telegram ДО таймаута. Сначала
+    // проверяем реальный статус, и только если он не подтвердился —
+    // показываем ошибку. Кнопка остаётся disabled всё это время, чтобы
+    // исключить повторный клик и дублирующую публикацию.
+    trackGoal("publish_button_loading_timeout",{channel_id:channelId,post_id:postId,stage:"publish"});
+    btn.innerHTML='<span class="spinner"></span> Проверяем статус публикации…';
+    const {confirmed}=await pollPostStatus(postId);
+    if(confirmed){
+      trackGoal("first_post_publish_success",{channel_id:channelId,post_id:postId,reconciled_after_timeout:true});
+      trackGoal("first_post_published",{channel_id:channelId});
+      logLandingEventWeb("first_post_published");
+      renderPublishSuccess(channelId, tgChat, postId);
+      return;
+    }
+    trackGoal("first_post_publish_failed",{channel_id:channelId,post_id:postId,reason:"timeout_unconfirmed"});
+    toast("Не удалось подтвердить публикацию. Проверьте канал или попробуйте ещё раз.","err");
     btn.innerHTML="Опубликовать сейчас";btn.disabled=false;
     return;
   }
   if(error){
-    trackGoal("first_post_publish_failed",{channel_id:channelId,reason:error.message});
+    trackGoal("first_post_publish_failed",{channel_id:channelId,post_id:postId,reason:error.message});
     toast(error.message||"Не удалось опубликовать пост","err");
     btn.innerHTML="Опубликовать сейчас";btn.disabled=false;
     return;
@@ -1921,8 +1955,28 @@ async function savePost(id){
 async function publishPost(id){
   const ta=$("pt_"+id);
   if(ta&&!ta.classList.contains("hidden")) try{await api("PATCH","/posts/"+id,{text:ta.value});}catch(_){}
-  try{await api("POST","/posts/"+id+"/publish");toast("Опубликовано ✓","ok");renderQueue();}
-  catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+
+  const card=$("pc_"+id);
+  const btn=card?card.querySelector(`[onclick="publishPost(${id})"]`):null;
+  if(btn){btn.innerHTML='<span class="spinner"></span> Публикуем…';btn.disabled=true;}
+
+  const TIMEOUT_MS=18000;
+  const {timedOut, error} = await withTimeout(api("POST","/posts/"+id+"/publish"), TIMEOUT_MS, "timeout");
+
+  if(timedOut){
+    if(btn) btn.innerHTML='<span class="spinner"></span> Проверяем статус…';
+    const {confirmed}=await pollPostStatus(id);
+    if(confirmed){toast("Опубликовано ✓","ok");renderQueue();return;}
+    toast("Не удалось подтвердить публикацию. Проверьте канал или попробуйте ещё раз.","err");
+    if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
+    return;
+  }
+  if(error){
+    toast(error.message||"Ошибка","err");
+    if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
+    return;
+  }
+  toast("Опубликовано ✓","ok");renderQueue();
 }
 async function rejectPost(id){
   try{await api("POST","/posts/"+id+"/reject");renderQueue();}
