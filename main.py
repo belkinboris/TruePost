@@ -93,6 +93,9 @@ app.include_router(internal_metrics_router)
 from internal_landing_funnel import router as landing_funnel_router
 app.include_router(landing_funnel_router)
 
+from internal_schema_diagnostics import router as schema_diag_router
+app.include_router(schema_diag_router)
+
 # ── Авторизация ───────────────────────────────────────────────
 
 def current_user(authorization: str = Header(default="")) -> User:
@@ -1080,6 +1083,33 @@ def delete_account(user: User = Depends(current_user)):
     except Exception as e:
         _fail("обнуление referred_by у приглашённых пользователей", e)
 
+    # КРИТИЧНО (настоящий root cause, найден по реальному логу Railway):
+    # реальная ошибка была
+    #   "update or delete on table user violates foreign key constraint
+    #    idempotencykey_user_id_fkey ... Key (id)=(21) is still referenced
+    #    from table idempotencykey"
+    # Очистка IdempotencyKey раньше стояла ПОСЛЕ удаления User (шаг 8) --
+    # это и было причиной FK violation: Postgres не разрешает удалить
+    # родительскую строку, пока есть ссылающиеся дочерние. Переносим этот
+    # шаг ДО удаления User. Чистим и по user_id (это и есть constraint,
+    # который реально нарушался), и по channel_id (на случай записей без
+    # явного user_id или рассинхрона).
+    try:
+        with session() as s:
+            removed = 0
+            for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.user_id == uid)).all():
+                s.delete(k); removed += 1
+            for cid in chan_ids:
+                for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == cid)).all():
+                    s.delete(k); removed += 1
+            s.commit()
+            logger.info(f"{log_prefix} шаг 6.5: IdempotencyKey очищены ДО удаления User: {removed}")
+    except Exception as e:
+        logger.warning(f"{log_prefix} шаг 6.5 (IdempotencyKey) не удался: exception_type={type(e).__name__} repr={repr(e)} orig={repr(getattr(e, 'orig', None))}")
+        # НЕ критично само по себе как шаг, НО если эта очистка не сработала
+        # (например другая ошибка), то шаг 7 (удаление User) ниже всё равно
+        # упадёт с тем же FK violation -- лог покажет это явно на шаге 7.
+
     try:
         with session() as s:
             u = s.get(User, uid)
@@ -1088,21 +1118,34 @@ def delete_account(user: User = Depends(current_user)):
                 s.commit()
             logger.info(f"{log_prefix} шаг 7: пользователь удалён, ВСЁ ОСНОВНОЕ УДАЛЕНИЕ УСПЕШНО")
     except Exception as e:
-        _fail("удаление самого User", e)
-
-    # Очистка IdempotencyKey -- отдельная, изолированная попытка, ПОСЛЕ того
-    # как основной аккаунт уже удалён и закоммичен. Любая её ошибка (включая
-    # отсутствие таблицы) не должна откатывать уже выполненное удаление.
-    try:
-        with session() as s:
-            removed = 0
-            for cid in chan_ids:
-                for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == cid)).all():
-                    s.delete(k); removed += 1
-            s.commit()
-            logger.info(f"{log_prefix} шаг 8 (опционально): IdempotencyKey очищены: {removed}")
-    except Exception as e:
-        logger.warning(f"{log_prefix} шаг 8 (опционально) не удался, НЕ критично: exception_type={type(e).__name__} repr={repr(e)}")
+        logger.error(
+            f"{log_prefix} шаг 7 (hard delete) ПРОВАЛЕН: "
+            f"exception_type={type(e).__name__} repr={repr(e)} orig={repr(getattr(e, 'orig', None))}"
+        )
+        # Fallback (task requirement): если есть FK constraint, который мы не
+        # предусмотрели заранее (неизвестная таблица), не показываем
+        # пользователю мёртвый отказ -- анонимизируем запись через уже
+        # существующие поля вместо физического удаления строки. Это не
+        # требует изменения схемы (новых колонок типа is_deleted), поэтому
+        # безопасно деплоить прямо сейчас. Пользователь теряет доступ
+        # (email больше не совпадает ни с одним логином), что эквивалентно
+        # удалению аккаунта с точки зрения UX.
+        try:
+            with session() as s2:
+                u2 = s2.get(User, uid)
+                if u2:
+                    anon_suffix = correlation_id
+                    u2.email = f"deleted-{anon_suffix}@deleted.local"
+                    u2.password_hash = "deleted"
+                    u2.tg_chat_id = None
+                    u2.tg_username = ""
+                    u2.ref_code = f"DEL-{anon_suffix}"
+                    s2.add(u2)
+                    s2.commit()
+                logger.warning(f"{log_prefix} шаг 7 fallback: запись анонимизирована (soft-delete через существующие поля), физическая строка User сохранена из-за неизвестного FK")
+        except Exception as e2:
+            logger.error(f"{log_prefix} шаг 7 fallback ТОЖЕ ПРОВАЛЕН: exception_type={type(e2).__name__} repr={repr(e2)}")
+            _fail("удаление самого User (включая fallback-анонимизацию)", e)
 
     return {"ok": True}
 
