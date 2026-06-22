@@ -27,7 +27,7 @@ YOOKASSA_SEND_RECEIPT = os.getenv("YOOKASSA_SEND_RECEIPT", "false").lower() in {
 YOOKASSA_VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))  # 1 = без НДС
 
 # Токенов в подарок новому пользователю
-WELCOME_TOKENS = int(os.getenv("WELCOME_TOKENS", "111000"))  # 3 бесплатных поста
+WELCOME_TOKENS = int(os.getenv("WELCOME_TOKENS", "200000"))  # бесплатная квота для новых пользователей
 # Бонус за реферала (обоим)
 REFERRAL_BONUS_TOKENS = int(os.getenv("REFERRAL_BONUS_TOKENS", "50000"))  # ~1–2 поста
 

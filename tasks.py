@@ -56,7 +56,7 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
         if not user:
             return {"ok": False, "message": "Владелец не найден"}
         if user.token_balance <= 0:
-            return {"ok": False, "message": "Закончились токены. Пополните баланс."}
+            return {"ok": False, "message": "Бесплатный лимит закончился. Пополните баланс, чтобы создавать новые посты."}
         channel_about = channel.about
         channel_title = channel.title
         sources = s.exec(
@@ -86,6 +86,31 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
     topic_to_classify = topic or channel_about
     classification = await generator.classify_topic(topic_to_classify)
     logger.info(f"Канал {channel_id}: topic_classification={classification} для «{topic_to_classify[:80]}»")
+
+    if classification == "ambiguous_intimate_topic":
+        # Task E: серая зона дошла до генерации напрямую (минуя /validate-topic,
+        # например defense-in-depth расхождение классификаторов). Та же логика
+        # очистки черновика что и для rejection, но сообщение — уточняющее,
+        # не отказное.
+        with session() as s:
+            existing_posts = s.exec(select(Post).where(Post.channel_id == channel_id)).first()
+            if not existing_posts:
+                ch = s.get(Channel, channel_id)
+                if ch:
+                    logger.info(f"Канал {channel_id}: удаляю draft-канал, тема требует уточнения (ambiguous_intimate_topic)")
+                    from database import IdempotencyKey
+                    for k in s.exec(select(IdempotencyKey).where(IdempotencyKey.channel_id == channel_id)).all():
+                        s.delete(k)
+                    s.delete(ch)
+                    s.commit()
+        return {
+            "ok": False,
+            "message": generator.AMBIGUOUS_INTIMATE_CLARIFICATION,
+            "topic_classification": classification,
+            "is_clarification": True,
+            "channel_deleted": True,
+        }
+
     rejection_msg = generator.rejection_message(classification)
     if rejection_msg:
         # Defense in depth: тема уже должна была быть отклонена на этапе

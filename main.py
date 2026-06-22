@@ -336,12 +336,26 @@ async def validate_topic(data: _TopicValidateIn, user: User = Depends(current_us
     при отрицательном результате.
     """
     classification = await generator.classify_topic(data.topic)
-    rejection_msg = generator.rejection_message(classification)
     logger.info(f"validate_topic: user={user.id} topic_classification={classification} topic=«{data.topic[:80]}»")
+
+    if classification == "ambiguous_intimate_topic":
+        # Task E: серая зона — не жёсткий отказ, а уточняющий вопрос.
+        # ok=false (канал пока не создаём), но это другая категория чем
+        # rejection — фронт должен показать иной UX (предложение продолжить
+        # с переформулированной/уточнённой темой, не просто "тема запрещена").
+        return {
+            "ok": False,
+            "classification": classification,
+            "message": generator.AMBIGUOUS_INTIMATE_CLARIFICATION,
+            "is_clarification": True,
+        }
+
+    rejection_msg = generator.rejection_message(classification)
     return {
         "ok": rejection_msg is None,
         "classification": classification,
         "message": rejection_msg,
+        "is_clarification": False,
     }
 
 
@@ -538,7 +552,7 @@ async def generate_channel_format(
         ch = _own_channel(s, channel_id, user)
         u = s.get(User, user.id)
         if u.token_balance <= 0:
-            raise HTTPException(400, "Закончились токены")
+            raise HTTPException(400, "Бесплатный лимит закончился. Пополните баланс, чтобы создавать новые посты.")
 
     # Временно меняем формат для этой генерации
     with session() as s:
@@ -581,7 +595,7 @@ async def analyze_channel(channel_id: int, data: AnalyzeIn, user: User = Depends
         _own_channel(s, channel_id, user)
         u = s.get(User, user.id)
         if u.token_balance <= 0:
-            raise HTTPException(400, "Закончились токены")
+            raise HTTPException(400, "Бесплатный лимит закончился. Пополните баланс, чтобы создавать новые посты.")
 
     posts = await research.scrape_channel(data.link)
     if not posts:
@@ -605,7 +619,7 @@ async def analyze_style_only(data: AnalyzeStyleOnly, user: User = Depends(curren
     with session() as s:
         u = s.get(User, user.id)
         if u.token_balance <= 0:
-            raise HTTPException(400, "Закончились токены")
+            raise HTTPException(400, "Бесплатный лимит закончился. Пополните баланс, чтобы создавать новые посты.")
 
     posts = await research.scrape_channel(data.link)
     if not posts:
