@@ -2059,7 +2059,7 @@ async function renderBilling(){
     </div>
     <div class="card" style="margin-bottom:16px">
       <div class="card-title">🎁 Реферальная программа</div>
-      <p style="font-size:14px;color:var(--text-dim);margin-bottom:12px">За каждого приглашённого — <b>+1–2 поста</b> тебе и другу.</p>
+      <p style="font-size:14px;color:var(--text-dim);margin-bottom:12px">Пригласите друга — получите по <b>200 000 токенов</b> каждому.</p>
       <div id="ref_block" class="text-faint">Загрузка…</div>
     </div>
     <div class="card" style="margin-bottom:16px">
