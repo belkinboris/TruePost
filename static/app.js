@@ -230,10 +230,20 @@ async function go(view,channelId){
   App.view=view;
   if(channelId!==undefined) App.channelId=channelId;
   if(view==="dashboard") return renderDashboard();
-  if(view==="new_channel") return renderQuickStart();
+  if(view==="new_channel") return renderNewChannelRouter();
   if(view==="connect_channel") return renderConnectChannel();
   if(view==="channel") return renderChannel();
   if(view==="billing") return renderBilling();
+}
+
+async function renderNewChannelRouter(){
+  // Task item 4: quick start — только для самого первого канала. Если у
+  // пользователя уже есть хотя бы один канал, "Новый канал" должен вести
+  // на полноценную форму с настройками, не на упрощённый онбординг.
+  let chans=[];
+  try{ chans = await api("GET","/channels"); }catch(_){}
+  if(chans.length>0) return renderNewChannelSettings();
+  return renderQuickStart();
 }
 
 // AUTH
@@ -418,6 +428,19 @@ async function renderDashboard(){
   }
 
   if(!chans.length){
+    if(App._onboardingSkipped){
+      // Пользователь явно нажал "Пропустить" — показываем пустой dashboard
+      // с явным призывом создать канал, не зацикливаем обратно на quick start.
+      $("app").innerHTML=topbar()+`<div class="wrap">
+        <div class="page-head"><h1>Твои каналы</h1><p>Пока нет ни одного канала.</p></div>
+        <div class="grid grid-3">
+          <div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
+            <div style="font-size:14px;font-weight:500">Новый канал</div></div>
+        </div>
+        <div id="dash_footer"></div></div>`;
+      const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
+      return;
+    }
     return renderQuickStart(); // новый пользователь — сразу к первому посту, без пустого дашборда
   }
   $("app").innerHTML=topbar()+`<div class="wrap">
@@ -460,10 +483,11 @@ function renderQuickStart(){
   App._chan = null;
 
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
-    <button class="back-link" style="margin-top:12px" onclick="go('dashboard')">← Все каналы</button>
+    <button class="back-link" style="margin-top:12px" onclick="qsSkip()">Пропустить →</button>
     <div class="page-head" style="text-align:center;margin-top:8px">
       <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">О чём сделать первый пост?</h1>
       <p style="color:var(--text-dim)">Канал можно подключить позже — сначала покажем пример поста.</p>
+      <p style="color:var(--text-faint);font-size:13px;margin-top:6px">Сейчас покажем пример поста. Потом можно будет менять стиль, длину, расписание и подключить канал.</p>
     </div>
     <div class="card">
       <textarea id="qs_about" rows="3" placeholder="Например: M&A сделки в России, Roblox, салон красоты, криптоновости" style="font-size:15px"></textarea>
@@ -472,6 +496,111 @@ function renderQuickStart(){
       onclick="qsGenerate()" id="qs_btn">Сгенерировать пост</button>
   </div>`;
   setTimeout(()=>{const el=$("qs_about");if(el) el.focus();},100);
+}
+
+function qsSkip(){
+  // Task item 1: явный флаг "пользователь сам пропустил onboarding в этой
+  // сессии" — без него renderDashboard() снова увидит chans.length===0 и
+  // зациклит обратно на quick start (та самая "loop" из задачи).
+  trackGoal("quick_start_skipped");
+  App._onboardingSkipped = true;
+  go("dashboard");
+}
+
+// ── Создание второго и следующих каналов (task item 2) ────────────────
+// Минимальная форма с настройками — НЕ quick start (тот только для первого
+// канала, см. renderNewChannelRouter). Без полного восстановления старого
+// мёртвого renderNewChannel/ncGenerate — это новый, компактный flow.
+function renderNewChannelSettings(){
+  trackGoal("new_channel_settings_opened");
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <button class="back-link" style="margin-top:12px" onclick="go('dashboard')">← Все каналы</button>
+    <div class="page-head" style="margin-top:8px">
+      <h1>Новый канал</h1>
+      <p style="color:var(--text-dim)">Базовые настройки — остальное можно донастроить позже во вкладке «Расширенные».</p>
+    </div>
+
+    <label class="field"><span class="field-label">Название канала</span>
+      <input id="ncs_title" placeholder="Например: Новости M&A" style="width:100%"></label>
+
+    <label class="field mt"><span class="field-label">Тема канала</span>
+      <textarea id="ncs_about" rows="3" placeholder="О чём канал, для кого, какой тон" style="width:100%;font-size:15px"></textarea></label>
+
+    <label class="field mt"><span class="field-label">@username канала <span class="text-faint">(можно позже)</span></span>
+      <input id="ncs_chat" placeholder="@my_channel" style="width:100%"></label>
+
+    <label class="field mt"><span class="field-label">Частота генерации</span>
+      <select id="ncs_interval" style="width:100%">
+        <option value="6">Каждые 6 часов</option>
+        <option value="12" selected>Каждые 12 часов</option>
+        <option value="24">Раз в сутки</option>
+        <option value="48">Раз в 2 суток</option>
+      </select></label>
+
+    <div class="card mt">
+      <div class="toggle-row">
+        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если выключено — каждый пост ждёт вашего подтверждения перед публикацией.</small></div>
+        <label class="switch"><input type="checkbox" id="ncs_auto"><span class="slider"></span></label>
+      </div>
+    </div>
+
+    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+      onclick="ncsCreate()" id="ncs_btn">Создать канал</button>
+  </div>`;
+  setTimeout(()=>{const el=$("ncs_title");if(el) el.focus();},100);
+}
+
+let _ncsCreateInFlight=false;
+
+async function ncsCreate(){
+  if(!requireAuth()) return;
+  if(_ncsCreateInFlight) return;
+  const title=($("ncs_title").value||"").trim();
+  const about=($("ncs_about").value||"").trim();
+  if(!title) return toast("Укажите название канала","err");
+  if(!about) return toast("Опишите тему канала","err");
+
+  const tgChat=($("ncs_chat").value||"").trim();
+  const intervalHours=parseFloat($("ncs_interval").value||"12");
+  const autoPublish=!!$("ncs_auto").checked;
+
+  // Topic validation (та же защита что и в quick start, не дублируем логику —
+  // переиспользуем существующий /validate-topic эндпоинт).
+  _ncsCreateInFlight=true;
+  const btn=$("ncs_btn");
+  btn.innerHTML='<span class="spinner"></span> Проверяю тему…';btn.disabled=true;
+  try{
+    const validation=await api("POST","/validate-topic",{topic:about});
+    if(!validation.ok){
+      toast(validation.message||"Не понял тему. Напишите проще.","err");
+      btn.innerHTML="Создать канал";btn.disabled=false;
+      _ncsCreateInFlight=false;
+      return;
+    }
+  }catch(e){
+    toast("Не удалось проверить тему. Попробуйте переформулировать.","err");
+    btn.innerHTML="Создать канал";btn.disabled=false;
+    _ncsCreateInFlight=false;
+    return;
+  }
+
+  btn.innerHTML='<span class="spinner"></span> Создаю канал…';
+  try{
+    const chan=await api("POST","/channels",{
+      title, about,
+      tg_chat: tgChat,
+      interval_hours: intervalHours,
+      auto_publish: autoPublish,
+    });
+    trackGoal("new_channel_settings_created",{channel_id:chan.id});
+    toast("Канал создан ✓","ok");
+    go("channel",chan.id);
+  }catch(e){
+    toast(e&&e.message?e.message:"Ошибка запроса","err");
+    btn.innerHTML="Создать канал";btn.disabled=false;
+  }finally{
+    _ncsCreateInFlight=false;
+  }
 }
 
 let _qsGenerateInFlight = false;
