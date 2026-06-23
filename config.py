@@ -13,6 +13,10 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
+# @maintrpost_bot -- вход в Mini App (Main Mini App режим включён в BotFather).
+# Отдельный бот от TELEGRAM_BOT_TOKEN (который управляет @Trpst_bot, publishing bot).
+MAIN_BOT_TOKEN = os.getenv("MAIN_BOT_TOKEN", "")
+MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME", "maintrpost_bot")
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./postbot.db")
 PUBLIC_URL = os.getenv("PUBLIC_URL") or (
     f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}"
@@ -29,7 +33,7 @@ YOOKASSA_VAT_CODE = int(os.getenv("YOOKASSA_VAT_CODE", "1"))  # 1 = без НД�
 # Токенов в подарок новому пользователю
 WELCOME_TOKENS = int(os.getenv("WELCOME_TOKENS", "200000"))  # бесплатная квота для новых пользователей
 # Бонус за реферала (обоим)
-REFERRAL_BONUS_TOKENS = int(os.getenv("REFERRAL_BONUS_TOKENS", "50000"))  # ~1–2 поста
+REFERRAL_BONUS_TOKENS = int(os.getenv("REFERRAL_BONUS_TOKENS", "200000"))  # по 200к и пригласившему, и приглашённому
 
 TICK_SECONDS = int(os.getenv("TICK_SECONDS", "60"))
 

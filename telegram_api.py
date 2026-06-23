@@ -145,10 +145,11 @@ def normalize_publish_error(raw_description: str, bot_username: str = "") -> str
     return f"Не удалось опубликовать пост в Telegram. Проверьте подключение канала и попробуйте ещё раз."
 
 
-async def _call(method: str, payload: dict) -> dict:
-    if not config.TELEGRAM_BOT_TOKEN:
+async def _call(method: str, payload: dict, token: str = None) -> dict:
+    token = token or config.TELEGRAM_BOT_TOKEN
+    if not token:
         return {"ok": False, "description": "TELEGRAM_BOT_TOKEN не задан"}
-    url = API.format(token=config.TELEGRAM_BOT_TOKEN, method=method)
+    url = API.format(token=token, method=method)
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, json=payload)
         return r.json()

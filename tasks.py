@@ -427,6 +427,7 @@ def _is_due(channel: Channel, now: datetime) -> bool:
 
 
 _last_update_id = 0
+_last_main_bot_update_id = 0
 
 async def _process_bot_updates():
     """Получает обновления от бота и привязывает chat_id к аккаунтам."""
@@ -467,6 +468,55 @@ async def _process_bot_updates():
                     logger.info(f"Linked tg_chat_id={chat_id} to user_id={user_id}")
 
 
+async def _process_main_bot_updates():
+    """
+    Обрабатывает /start у @maintrpost_bot (вход в Mini App, Task 1).
+    Это ОТДЕЛЬНЫЙ бот от @Trpst_bot (publishing) -- свой токен, свой
+    независимый offset обновлений (Telegram API ведёт отдельный поток
+    update_id для каждого бота).
+
+    Раньше /start у этого бота вообще ничего не отвечал, если пользователь
+    написал его без параметра (или с незнакомым параметром) -- человек
+    оставался в боте без единой подсказки что делать дальше. Теперь любой
+    /start здесь получает приветствие с кнопкой Mini App.
+    """
+    global _last_main_bot_update_id
+    if not config.MAIN_BOT_TOKEN:
+        return
+    import telegram_api as tg
+    result = await tg._call("getUpdates", {
+        "offset": _last_main_bot_update_id + 1,
+        "timeout": 0,
+        "limit": 100,
+        "allowed_updates": ["message"]
+    }, token=config.MAIN_BOT_TOKEN)
+    if not result.get("ok"):
+        return
+    updates = result.get("result", [])
+    for upd in updates:
+        _last_main_bot_update_id = upd["update_id"]
+        msg = upd.get("message", {})
+        text = msg.get("text", "")
+        chat_id = msg.get("chat", {}).get("id")
+        if not text.startswith("/start") or not chat_id:
+            continue
+
+        # Кнопка типа web_app открывает именно Mini App (не внешний браузер) —
+        # это единственный программный способ гарантировать одно нажатие на
+        # Android и iOS одинаково. Обычная url-кнопка открыла бы системный
+        # браузер, а не Mini App внутри Telegram.
+        await tg._call("sendMessage", {
+            "chat_id": chat_id,
+            "text": "👋 Привет! АвтоПост пишет посты для вашего Telegram-канала и помогает публиковать их по расписанию.\n\nНажмите кнопку ниже, чтобы открыть приложение.",
+            "reply_markup": {
+                "inline_keyboard": [[
+                    {"text": "Открыть АвтоПост", "web_app": {"url": config.PUBLIC_URL}}
+                ]]
+            }
+        }, token=config.MAIN_BOT_TOKEN)
+        logger.info(f"main_bot /start: отправлено приветствие chat_id={chat_id}")
+
+
 MIN_QUEUE = 3  # минимум постов в очереди
 
 async def _refill_if_active(channel_id: int):
@@ -505,11 +555,17 @@ async def _ensure_queue(published_post_id: int):
 async def tick():
     now = datetime.utcnow()
 
-    # Polling Telegram bot updates для привязки chat_id
+    # Polling Telegram bot updates для привязки chat_id (publishing bot)
     try:
         await _process_bot_updates()
     except Exception as e:
         logger.warning(f"bot polling: {e}")
+
+    # Polling /start у @maintrpost_bot (вход в Mini App, Task 1)
+    try:
+        await _process_main_bot_updates()
+    except Exception as e:
+        logger.warning(f"main bot polling: {e}")
 
     with session() as s:
         channels = s.exec(select(Channel).where(Channel.enabled == True)).all()  # noqa
