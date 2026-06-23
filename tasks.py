@@ -468,6 +468,17 @@ async def _process_bot_updates():
                     logger.info(f"Linked tg_chat_id={chat_id} to user_id={user_id}")
 
 
+_main_bot_last_reply = {}  # chat_id -> timestamp последнего ответа (debounce)
+MAIN_BOT_DEBOUNCE_SECONDS = 10  # не отвечать тому же chat_id чаще чем раз в 10с
+
+async def poll_main_bot():
+    """Публичная обёртка для отдельного, более частого scheduler job (P1 fix)."""
+    try:
+        await _process_main_bot_updates()
+    except Exception as e:
+        logger.warning(f"main bot polling: {e}")
+
+
 async def _process_main_bot_updates():
     """
     Обрабатывает /start у @maintrpost_bot (вход в Mini App, Task 1).
@@ -479,11 +490,20 @@ async def _process_main_bot_updates():
     написал его без параметра (или с незнакомым параметром) -- человек
     оставался в боте без единой подсказки что делать дальше. Теперь любой
     /start здесь получает приветствие с кнопкой Mini App.
+
+    P1 fix (debounce): если пользователь нажимает /start несколько раз
+    подряд за время, прошедшее между опросами (раньше -- 60с тика, теперь --
+    3с, но та же проблема может возникнуть при любом интервале если несколько
+    /start пришли в одном пакете getUpdates), цикл ниже обрабатывал каждое
+    сообщение как отдельный /start и отправлял отдельное приветствие на
+    каждое -- отсюда "пачка одинаковых сообщений". Теперь не отвечаем
+    повторно тому же chat_id чаще чем раз в MAIN_BOT_DEBOUNCE_SECONDS.
     """
     global _last_main_bot_update_id
     if not config.MAIN_BOT_TOKEN:
         return
     import telegram_api as tg
+    import time
     result = await tg._call("getUpdates", {
         "offset": _last_main_bot_update_id + 1,
         "timeout": 0,
@@ -500,6 +520,13 @@ async def _process_main_bot_updates():
         chat_id = msg.get("chat", {}).get("id")
         if not text.startswith("/start") or not chat_id:
             continue
+
+        now = time.monotonic()
+        last_reply = _main_bot_last_reply.get(chat_id, 0)
+        if now - last_reply < MAIN_BOT_DEBOUNCE_SECONDS:
+            logger.info(f"main_bot /start: debounce сработал для chat_id={chat_id}, повторный /start проигнорирован")
+            continue
+        _main_bot_last_reply[chat_id] = now
 
         # Кнопка типа web_app открывает именно Mini App (не внешний браузер) —
         # это единственный программный способ гарантировать одно нажатие на
@@ -560,12 +587,6 @@ async def tick():
         await _process_bot_updates()
     except Exception as e:
         logger.warning(f"bot polling: {e}")
-
-    # Polling /start у @maintrpost_bot (вход в Mini App, Task 1)
-    try:
-        await _process_main_bot_updates()
-    except Exception as e:
-        logger.warning(f"main bot polling: {e}")
 
     with session() as s:
         channels = s.exec(select(Channel).where(Channel.enabled == True)).all()  # noqa

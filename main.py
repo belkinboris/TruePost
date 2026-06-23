@@ -78,8 +78,17 @@ async def lifespan(app: FastAPI):
             tasks.tick, "interval", seconds=config.TICK_SECONDS,
             id="master_tick", replace_existing=True, max_instances=1, coalesce=True,
         )
+        # КРИТИЧНО (P1 fix): /start у @maintrpost_bot раньше ловился только
+        # внутри tick() (раз в 60с) -- пользователь мог ждать ответа до
+        # минуты. Отдельная, более частая задача специально для этого --
+        # не трогаем общий TICK_SECONDS, который разумен для генерации/
+        # публикации постов, но слишком редок для интерактивного /start.
+        _scheduler.add_job(
+            tasks.poll_main_bot, "interval", seconds=config.MAIN_BOT_POLL_SECONDS,
+            id="main_bot_poll", replace_existing=True, max_instances=1, coalesce=True,
+        )
         _scheduler.start()
-        logger.info(f"Планировщик запущен, тик каждые {config.TICK_SECONDS}с")
+        logger.info(f"Планировщик запущен, тик каждые {config.TICK_SECONDS}с, /start-поллинг каждые {config.MAIN_BOT_POLL_SECONDS}с")
     yield
     if _HAS_SCHEDULER and _scheduler and _scheduler.running:
         _scheduler.shutdown(wait=False)
