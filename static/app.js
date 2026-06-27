@@ -102,6 +102,22 @@ function logLandingEventWeb(eventName){
   }catch(_){}
 }
 
+function logProductEvent(eventName, packageId){
+  // Минимальная диагностика payment path (не для рекламной атрибуции —
+  // для этого LandingEvent/Метрика). Требует токена, потому что эти события
+  // происходят только после регистрации. Fire-and-forget — не блокирует
+  // действие пользователя, не показывает ошибку при сбое.
+  try{
+    if(!App.token) return;
+    fetch("/api/product-event",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+App.token},
+      body:JSON.stringify({event:eventName, package_id:packageId||""}),
+      keepalive:true,
+    }).catch(()=>{});
+  }catch(_){}
+}
+
 function cleanPostText(text){
   if(!text) return "";
   let t=text.trim();
@@ -332,6 +348,10 @@ function topbar(backView,backLabel){
   // бесплатной квоты до 200k порог пересчитан пропорционально (раньше был
   // 20000 при квоте ~111000, те же ~18% от квоты).
   const low=App.user&&App.user.token_balance<36000;
+  if(low && !window._quotaWarningLogged){
+    window._quotaWarningLogged=true; // раз за вкладку, не на каждый рендер topbar()
+    logProductEvent("quota_warning_seen");
+  }
   const lowBanner=low?`<div style="background:#fef3c7;border-bottom:1px solid #f59e0b;padding:8px 20px;font-size:13px;text-align:center;color:#92400e">
     ⚠️ Баланс заканчивается.
     <a onclick="go('billing')" style="color:#92400e;font-weight:600;cursor:pointer;text-decoration:underline">Пополнить →</a></div>`:"";
@@ -725,6 +745,7 @@ async function _qsGenerateImpl(about){
     const errMsg=(e&&e.message)||"";
     const isTokenIssue=errMsg.toLowerCase().includes("токен")||errMsg.toLowerCase().includes("баланс");
     trackGoal("first_post_generation_failed",{channel_id:chan.id,reason:errMsg});
+    if(isTokenIssue) logProductEvent("limit_reached");
 
     // Если тема была отклонена классификатором (defense-in-depth расхождение
     // между validate-topic и generate_for_channel) — backend уже удалил
@@ -2153,6 +2174,8 @@ async function generateNow(){
       App.tab="queue";renderChannel();return;
     }catch(e){
       const is529=e.message.includes("529")||e.message.toLowerCase().includes("overload");
+      const isLimit=e.message.toLowerCase().includes("токен")||e.message.toLowerCase().includes("баланс");
+      if(isLimit) logProductEvent("limit_reached");
       attempts++;
       if(is529&&attempts<3){toast(`Серверы заняты, повтор через 15с… (${attempts}/3)`);await new Promise(r=>setTimeout(r,15000));}
       else{toast(is529?"Серверы перегружены. Попробуй позже.":e.message,"err");if(btn) btn.innerHTML="Создать";return;}
@@ -2163,6 +2186,7 @@ async function generateNow(){
 // BILLING
 async function renderBilling(){
   await refreshUser();
+  logProductEvent("pricing_viewed");
   const plans=[
     {id:"p1",name:"Старт",price:"990 ₽/мес",channels:1,postsMin:30,postsMax:60},
     {id:"p2",name:"Про",price:"2 490 ₽/мес",channels:3,postsMin:75,postsMax:150,popular:true},
@@ -2249,10 +2273,15 @@ function togglePayHistory(){
 }
 
 async function buy(pid){
+  logProductEvent("payment_cta_clicked", pid);
   try{
     const r = await api("POST", "/billing/buy", {package_id: pid});
     trackGoal("payment_started",{package_id:pid});
-    if(!r.payment_url){ toast("Не удалось получить ссылку на оплату","err"); return; }
+    if(!r.payment_url){
+      logProductEvent("payment_failed", pid);
+      toast("Не удалось получить ссылку на оплату","err");
+      return;
+    }
     // Telegram Mini App — используем встроенный метод
     if(window.Telegram?.WebApp?.openLink){
       window.Telegram.WebApp.openLink(r.payment_url);
@@ -2260,6 +2289,7 @@ async function buy(pid){
       window.location.href = r.payment_url;
     }
   } catch(e){
+    logProductEvent("payment_failed", pid);
     toast(e&&e.message?e.message:"Ошибка запроса","err");
   }
 }
@@ -2542,6 +2572,19 @@ async function boot(){
     App.user=await api("GET","/me");
     try{ performance.mark('me_request_finished'); }catch(_){}
     console.log(`[timing] /me: ${(performance.now()-tMeStart).toFixed(0)}ms`);
+
+    // payment_returned: пользователь вернулся со страницы оплаты. Это НЕ
+    // означает успешную оплату — просто фиксирует факт возврата, чтобы
+    // отличить "ушёл оплачивать и не вернулся" от "вернулся, но не оплатил".
+    try{
+      const params=new URLSearchParams(window.location.search);
+      if(params.get("paid")){
+        logProductEvent("payment_returned");
+        params.delete("paid");
+        const newUrl=window.location.pathname+(params.toString()?"?"+params.toString():"");
+        window.history.replaceState({},"",newUrl);
+      }
+    }catch(_){}
 
     try{ performance.mark('channels_request_started'); }catch(_){}
     const tRouteStart = performance.now();
