@@ -25,7 +25,7 @@ import telegram_api
 import tasks
 from database import (
     init_db, session,
-    User, Channel, Source, Post, Payment, Referral, LandingEvent, IdempotencyKey,
+    User, Channel, Source, Post, Payment, Referral, LandingEvent, IdempotencyKey, ProductEvent,
 )
 from pydantic import BaseModel as _BaseModel
 from typing import Optional as _Opt
@@ -104,6 +104,9 @@ app.include_router(landing_funnel_router)
 
 from internal_schema_diagnostics import router as schema_diag_router
 app.include_router(schema_diag_router)
+
+from internal_payment_path import router as payment_path_router
+app.include_router(payment_path_router)
 
 # ── Авторизация ───────────────────────────────────────────────
 
@@ -275,6 +278,49 @@ def landing_event(data: _LandingEventIn, request: Request):
                 utm_campaign=(data.utm_campaign or "")[:100],
                 yclid=(data.yclid or "")[:100],
                 user_agent=ua[:300],
+            ))
+            s.commit()
+    except Exception:
+        pass
+    return {"ok": True}
+
+
+class _ProductEventIn(_BaseModel):
+    event: str
+    package_id: str = ""
+
+
+_ALLOWED_PRODUCT_EVENTS = {
+    "pricing_viewed",
+    "payment_cta_clicked",
+    "payment_failed",
+    "payment_returned",
+    "quota_warning_seen",
+    "limit_reached",
+}
+
+
+@app.post("/api/product-event")
+def product_event(data: _ProductEventIn, user: User = Depends(current_user)):
+    """
+    Минимальная диагностика payment path после регистрации (не для рекламной
+    атрибуции -- для этого уже есть LandingEvent/Метрика). Read-only, не
+    влияет на бизнес-логику, не блокирует пользователя при сбое.
+
+    Намеренно не пишет события которые уже есть как backend truth
+    (registration/channel_created/post_generated/payment_started/
+    payment_success) -- те уже надёжно видны через User/Channel/Post/Payment
+    напрямую, дублировать их здесь не нужно (см. карту событий в
+    internal_payment_path.py).
+    """
+    if data.event not in _ALLOWED_PRODUCT_EVENTS:
+        return {"ok": False}
+    try:
+        with session() as s:
+            s.add(ProductEvent(
+                user_id=user.id,
+                event=data.event,
+                package_id=(data.package_id or "")[:20],
             ))
             s.commit()
     except Exception:
@@ -914,6 +960,14 @@ async def buy(data: BuyIn, user: User = Depends(current_user)):
     payment_status = yk_payment.get("status", "pending")
     confirmation_url = (yk_payment.get("confirmation") or {}).get("confirmation_url")
     if not confirmation_url:
+        # Раньше Payment оставался pending навсегда -- diagnostics не мог
+        # отличить "провайдер не ответил" от "пользователь ещё не оплатил".
+        with session() as s:
+            pay = s.get(Payment, local_payment_id)
+            if pay:
+                pay.status = "failed"
+                s.add(pay)
+                s.commit()
         raise HTTPException(502, "YooKassa не вернула ссылку на оплату")
 
     with session() as s:

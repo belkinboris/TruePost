@@ -146,6 +146,31 @@ class LandingEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
+class ProductEvent(SQLModel, table=True):
+    """
+    Журнал product-events после регистрации, для диагностики payment path:
+    почему пользователи доходят до генерации постов, но не доходят до оплаты.
+
+    Минимальная версия -- без source attribution (Yandex/Telegram Ads), без
+    test-user exclusion, без allowlist метаданных. Если эти возможности
+    понадобятся позже -- добавлять осознанно, отдельной задачей, не сейчас.
+
+    Та же безопасная схема что LandingEvent/IdempotencyKey: новая таблица,
+    создаётся через create_all() без ALTER TABLE существующих таблиц.
+    user_id без FK -- аналитический журнал не должен ломать удаление аккаунта
+    (см. прошлый продовый инцидент с IdempotencyKey -- тот же класс риска
+    здесь предотвращён заранее).
+
+    Read-only снаружи: пишется через POST /api/product-event, читается через
+    GET /api/internal/payment-path-diagnostics.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, index=True)
+    event: str = Field(index=True)  # pricing_viewed, payment_cta_clicked, payment_failed, payment_returned, quota_warning_seen, limit_reached
+    package_id: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 class IdempotencyKey(SQLModel, table=True):
     """
     Защита от дублей при quick start (task item E): клиент генерирует
