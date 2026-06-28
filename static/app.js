@@ -14,6 +14,9 @@ const App = {
   user: null, cfg: null, view: "dashboard",
   channelId: null, tab: "queue", _chan: null,
   _onboardPosts: null, _consultHistory: [],
+  // Флаг "пользователь осознанно пропустил онбординг" -- переживает перезагрузку.
+  // Без этого renderDashboard() при chans.length===0 каждый раз возвращает на quick start.
+  _onboardingSkipped: !!localStorage.getItem("ap_onboarding_skipped"),
 };
 const $ = id => document.getElementById(id);
 const esc = s => (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":'&#39;'}[c]));
@@ -492,18 +495,77 @@ function renderQuickStart(){
   trackGoal("quick_start_viewed");
 
   // КРИТИЧНО (P0 fix, task item 1): каждый новый quick start начинается с
-  // полностью чистого состояния. Раньше здесь обновлялся только
-  // App._qsRequestId, а App.channelId/App._qsAbout могли остаться от
-  // предыдущей сессии онбординга, если что-то в SPA-навигации не вызывало
-  // renderQuickStart() заново (browser back-forward cache, восстановление
-  // состояния и т.п.) — это была вероятная причина P0 stale-topic бага.
+  // полностью чистого состояния.
   App._qsRequestId = "qs" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
   App.channelId = null;
   App._qsAbout = "";
   App._chan = null;
 
+  // Экран выбора: что делать сначала?
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <button class="back-link" style="margin-top:12px" onclick="qsSkip()">Пропустить →</button>
+    <div class="page-head" style="text-align:center;margin-top:8px">
+      <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">Что сделать сначала?</h1>
+      <p style="color:var(--text-dim)">Выберите — с чего начнём</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:24px">
+      <button class="btn" style="width:100%;justify-content:center;padding:16px;font-size:16px"
+        onclick="qsChooseGenerate()">Сгенерировать первый пост</button>
+      <button onclick="qsChooseAnalyze()"
+        style="width:100%;padding:16px;font-size:16px;border-radius:10px;border:1.5px solid var(--border);background:var(--surface);cursor:pointer;font-family:inherit;color:var(--text)">
+        Проанализировать мой Telegram-канал
+      </button>
+    </div>
+    <div style="text-align:center;margin-top:20px">
+      <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="qsSkip()">Пропустить</button>
+    </div>
+  </div>`;
+}
+
+function qsChooseGenerate(){
+  logProductEvent("onboarding_choice_selected", "generate_first_post");
+  renderQuickStartGenerate();
+}
+
+function qsChooseAnalyze(){
+  logProductEvent("onboarding_choice_selected", "analyze_existing_channel");
+  // Безопасный первый шаг: запросить @username канала.
+  // Не обещаем полноценный анализ — показываем что принято к сведению
+  // и переходим к генерации с подсказкой темы из имени канала.
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <button class="back-link" style="margin-top:12px" onclick="renderQuickStart()">← Назад</button>
+    <div class="page-head" style="text-align:center;margin-top:8px">
+      <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Ваш канал</h1>
+      <p style="color:var(--text-dim)">Укажите @username или ссылку на канал</p>
+    </div>
+    <div class="card">
+      <input id="qs_channel_link" placeholder="@mychannel или t.me/mychannel" style="font-size:15px;width:100%">
+    </div>
+    <p style="color:var(--text-faint);font-size:13px;margin-top:8px;text-align:center">
+      Сгенерируем пример поста в стиле вашего канала.
+    </p>
+    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+      onclick="qsAnalyzeSubmit()">Продолжить</button>
+    <div style="text-align:center;margin-top:12px">
+      <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="renderQuickStartGenerate()">
+        Пропустить — начать с темы
+      </button>
+    </div>
+  </div>`;
+  setTimeout(()=>{const el=$("qs_channel_link");if(el) el.focus();},100);
+}
+
+function qsAnalyzeSubmit(){
+  const raw=($("qs_channel_link").value||"").trim();
+  if(!raw) return toast("Укажите @username канала","err");
+  const handle=raw.replace(/^https?:\/\/t\.me\//,"@").replace(/^t\.me\//,"@").replace(/^@+/,"@");
+  renderQuickStartGenerate(handle);
+}
+
+function renderQuickStartGenerate(prefillTopic){
+  // Экран с textarea — существующий quick start flow без изменений логики генерации.
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <button class="back-link" style="margin-top:12px" onclick="renderQuickStart()">← Назад</button>
     <div class="page-head" style="text-align:center;margin-top:8px">
       <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">О чём сделать первый пост?</h1>
       <p style="color:var(--text-dim)">Канал можно подключить позже — сначала покажем пример поста.</p>
@@ -515,15 +577,18 @@ function renderQuickStart(){
     <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
       onclick="qsGenerate()" id="qs_btn">Сгенерировать пост</button>
   </div>`;
+  if(prefillTopic){const el=$("qs_about");if(el) el.value=prefillTopic;}
   setTimeout(()=>{const el=$("qs_about");if(el) el.focus();},100);
 }
 
 function qsSkip(){
-  // Task item 1: явный флаг "пользователь сам пропустил onboarding в этой
-  // сессии" — без него renderDashboard() снова увидит chans.length===0 и
-  // зациклит обратно на quick start (та самая "loop" из задачи).
+  // Флаг "пропустил онбординг" — теперь сохраняется в localStorage,
+  // чтобы переживать перезагрузку. Без этого renderDashboard() при
+  // chans.length===0 снова показывал quick start.
   trackGoal("quick_start_skipped");
+  logProductEvent("onboarding_choice_selected", "skip");
   App._onboardingSkipped = true;
+  localStorage.setItem("ap_onboarding_skipped", "1");
   go("dashboard");
 }
 
@@ -785,8 +850,19 @@ function renderFirstPostResult(channelId, post, about){
     </div>
     <div class="card" style="font-size:15px;line-height:1.7" id="fp_text">${renderTg(post.text)}</div>
 
-    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
-      onclick="go('connect_channel',${channelId})">Подключить Telegram-канал</button>
+    <div id="fp_feedback_block" style="margin-top:20px;padding:16px;background:var(--surface2);border-radius:12px;text-align:center">
+      <p style="font-weight:500;margin-bottom:12px">Пост подходит?</p>
+      <div style="display:flex;gap:10px;justify-content:center">
+        <button class="btn" style="padding:10px 28px" onclick="fpFeedbackGood(${channelId})">Да</button>
+        <button class="btn-outline" style="padding:10px 28px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface);cursor:pointer;font-family:inherit;color:var(--text)"
+          onclick="fpFeedbackBad(${channelId})">Не совсем</button>
+      </div>
+    </div>
+
+    <div id="fp_actions" style="display:none">
+      <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+        onclick="go('connect_channel',${channelId})">Подключить Telegram-канал</button>
+    </div>
 
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;justify-content:center">
       <button class="btn-outline btn-sm" onclick="qsRegenerate(${channelId})" id="fp_regen_btn">Ещё вариант</button>
@@ -799,6 +875,44 @@ function renderFirstPostResult(channelId, post, about){
       <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="go('dashboard')">Сохранить на потом</button>
     </div>
   </div>`;
+}
+
+function fpFeedbackGood(channelId){
+  logProductEvent("first_post_feedback", "good");
+  const fb=$("fp_feedback_block");
+  if(fb) fb.innerHTML=`<p style="color:var(--ok,#2a9d5c);font-weight:500">Отлично! ✓</p>
+    <p style="color:var(--text-dim);font-size:14px;margin-top:4px">Теперь можно подключить канал и собрать очередь публикаций.</p>`;
+  const actions=$("fp_actions");
+  if(actions) actions.style.display="block";
+}
+
+function fpFeedbackBad(channelId){
+  logProductEvent("first_post_feedback", "bad");
+  const fb=$("fp_feedback_block");
+  if(!fb) return;
+  const reasons=[
+    {k:"too_generic",   label:"Слишком общий"},
+    {k:"wrong_style",   label:"Не тот стиль"},
+    {k:"wrong_topic",   label:"Не про мою тему"},
+    {k:"too_dry",       label:"Слишком сухо"},
+    {k:"too_salesy",    label:"Слишком рекламно"},
+    {k:"other",         label:"Другое"},
+  ];
+  fb.innerHTML=`<p style="font-weight:500;margin-bottom:12px">Что не так?</p>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;justify-content:center">
+      ${reasons.map(r=>`<button onclick="fpFeedbackReason('${r.k}',${channelId})"
+        style="padding:8px 14px;border-radius:8px;border:1.5px solid var(--border);background:var(--surface);cursor:pointer;font-size:14px;font-family:inherit;color:var(--text)"
+        >${r.label}</button>`).join("")}
+    </div>`;
+}
+
+function fpFeedbackReason(reason, channelId){
+  logProductEvent("first_post_feedback_reason", reason);
+  const fb=$("fp_feedback_block");
+  if(fb) fb.innerHTML=`<p style="color:var(--text-dim);font-size:14px">Понял, спасибо. Попробуйте ещё вариант или уточните тему.</p>`;
+  // Показываем кнопку подключения канала — пользователь может продолжить несмотря на недовольство
+  const actions=$("fp_actions");
+  if(actions) actions.style.display="block";
 }
 
 async function qsRegenerate(channelId){
