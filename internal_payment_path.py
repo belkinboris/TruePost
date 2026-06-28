@@ -87,7 +87,7 @@ EVENT_MAP = [
     },
     {
         "stage": "payment_success",
-        "backend_truth": "Payment.status == 'succeeded', paid_at заполнен (webhook или sync)",
+        "backend_truth": "Payment.status == 'paid', paid_at заполнен (webhook или sync через /api/yookassa/notify)",
         "metrika_goal": "payment_success",
         "is_backend_fact": True,
     },
@@ -184,6 +184,22 @@ def payment_path_diagnostics(
             select(func.count()).select_from(Post).where(Post.created_at >= since)
         ).one()
 
+        # Разрез генераций: verified vs unverified каналы.
+        # Позволяет понять, не раздувается ли post_generations автоматической
+        # догенерацией очереди для каналов без подтверждённого Telegram-бота.
+        # Channel.verified == True означает что бот добавлен в канал и канал
+        # реально используется для публикации.
+        posts_for_verified = s.exec(
+            select(func.count()).select_from(Post).join(Channel, Post.channel_id == Channel.id).where(
+                Post.created_at >= since, Channel.verified == True  # noqa: E712
+            )
+        ).one()
+        posts_for_unverified = s.exec(
+            select(func.count()).select_from(Post).join(Channel, Post.channel_id == Channel.id).where(
+                Post.created_at >= since, Channel.verified == False  # noqa: E712
+            )
+        ).one()
+
         pricing_viewed = _count_product_event(s, "pricing_viewed", since)
         payment_cta_clicked = _count_product_event(s, "payment_cta_clicked", since)
         payment_failed_events = _count_product_event(s, "payment_failed", since)
@@ -191,12 +207,18 @@ def payment_path_diagnostics(
         quota_warning_seen = _count_product_event(s, "quota_warning_seen", since)
         limit_reached = _count_product_event(s, "limit_reached", since)
 
+        # Новые product events (онбординг + feedback)
+        onboarding_generate = _count_product_event(s, "onboarding_choice_selected", since)
+
         payment_started = s.exec(
             select(func.count()).select_from(Payment).where(Payment.created_at >= since)
         ).one()
+        # ИСПРАВЛЕНО: реальный статус успешной оплаты в БД — "paid" (не "succeeded").
+        # YooKassa присылает webhook с status="succeeded", но /api/yookassa/notify
+        # записывает в Payment.status значение "paid" (см. main.py строки 889-890).
         payment_success = s.exec(
             select(func.count()).select_from(Payment).where(
-                Payment.created_at >= since, Payment.status == "succeeded"
+                Payment.created_at >= since, Payment.status == "paid"
             )
         ).one()
         payment_failed_backend = s.exec(
@@ -235,7 +257,7 @@ def payment_path_diagnostics(
         )
     if payment_started > 0 and payment_success == 0 and payment_failed_backend == 0 and payment_pending > 0:
         missing_data.append(
-            f"Есть {payment_pending} Payment в статусе pending без succeeded/failed за период. "
+            f"Есть {payment_pending} Payment в статусе pending без paid/failed за период. "
             "Либо пользователь не довёл оплату до конца, либо webhook YooKassa не дошёл -- "
             "проверьте YOOKASSA webhook настройки и /api/yookassa/notify."
         )
@@ -257,6 +279,13 @@ def payment_path_diagnostics(
         "registrations": registrations,
         "channels_created": channels_created,
         "post_generations": post_generations,
+        # Разрез генераций: для понимания не раздуваются ли числа автоматикой.
+        # for_verified_channels — посты для каналов с подключённым ботом (реальное использование).
+        # for_unverified_channels — онбординг / черновики / брошенные каналы без бота.
+        "post_generations_breakdown": {
+            "for_verified_channels": posts_for_verified,
+            "for_unverified_channels": posts_for_unverified,
+        },
         "pricing_viewed": pricing_viewed,
         "payment_cta_clicked": payment_cta_clicked,
         "payment_started": payment_started,
@@ -274,7 +303,8 @@ def payment_path_diagnostics(
         "event_map": EVENT_MAP,
         "data_sources": {
             "backend_db": "User, Channel, Post, Payment -- прямой backend-факт",
-            "product_events": "ProductEvent (pricing_viewed, payment_cta_clicked, payment_failed, payment_returned, quota_warning_seen, limit_reached) -- добавлено этим патчем",
-            "not_included": "Yandex Direct / Telegram Ads атрибуция, Метрика goal counts -- источник рекламной атрибуции, не входит в этот endpoint намеренно",
+            "product_events": "ProductEvent (pricing_viewed, payment_cta_clicked, payment_failed, payment_returned, quota_warning_seen, limit_reached, onboarding_choice_selected, first_post_feedback, first_post_feedback_reason) -- диагностика",
+            "payment_success_status": "Payment.status == 'paid' (не 'succeeded' -- webhook записывает 'paid' в нашу БД)",
+            "not_included": "Yandex Direct / Telegram Ads атрибуция, Метрика goal counts -- не входит намеренно",
         },
     }

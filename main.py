@@ -297,6 +297,15 @@ _ALLOWED_PRODUCT_EVENTS = {
     "payment_returned",
     "quota_warning_seen",
     "limit_reached",
+    # Онбординг: выбор пути в начале quick start.
+    # package_id хранит значение: generate_first_post / analyze_existing_channel / skip
+    "onboarding_choice_selected",
+    # Качество первого поста: пользователь оценивает результат генерации.
+    # package_id хранит: good / bad
+    "first_post_feedback",
+    # Причина недовольства первым постом (если first_post_feedback == bad).
+    # package_id хранит: too_generic / wrong_style / wrong_topic / too_dry / too_salesy / other
+    "first_post_feedback_reason",
 }
 
 
