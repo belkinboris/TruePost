@@ -208,7 +208,56 @@ def payment_path_diagnostics(
         limit_reached = _count_product_event(s, "limit_reached", since)
 
         # Новые product events (онбординг + feedback)
-        onboarding_generate = _count_product_event(s, "onboarding_choice_selected", since)
+        # Разбивка onboarding_choice_selected по package_id
+        onboarding_generate = s.exec(
+            select(func.count()).select_from(ProductEvent).where(
+                ProductEvent.event == "onboarding_choice_selected",
+                ProductEvent.package_id == "generate_first_post",
+                ProductEvent.created_at >= since,
+            )
+        ).one()
+        onboarding_analyze = s.exec(
+            select(func.count()).select_from(ProductEvent).where(
+                ProductEvent.event == "onboarding_choice_selected",
+                ProductEvent.package_id == "analyze_existing_channel",
+                ProductEvent.created_at >= since,
+            )
+        ).one()
+        onboarding_skip = s.exec(
+            select(func.count()).select_from(ProductEvent).where(
+                ProductEvent.event == "onboarding_choice_selected",
+                ProductEvent.package_id == "skip",
+                ProductEvent.created_at >= since,
+            )
+        ).one()
+
+        # Разбивка first_post_feedback по package_id (good / bad)
+        feedback_good = s.exec(
+            select(func.count()).select_from(ProductEvent).where(
+                ProductEvent.event == "first_post_feedback",
+                ProductEvent.package_id == "good",
+                ProductEvent.created_at >= since,
+            )
+        ).one()
+        feedback_bad = s.exec(
+            select(func.count()).select_from(ProductEvent).where(
+                ProductEvent.event == "first_post_feedback",
+                ProductEvent.package_id == "bad",
+                ProductEvent.created_at >= since,
+            )
+        ).one()
+
+        # Разбивка first_post_feedback_reason по package_id
+        _reason_keys = ["too_generic", "wrong_style", "wrong_topic", "too_dry", "too_salesy", "other"]
+        feedback_reasons = {}
+        for reason in _reason_keys:
+            feedback_reasons[reason] = s.exec(
+                select(func.count()).select_from(ProductEvent).where(
+                    ProductEvent.event == "first_post_feedback_reason",
+                    ProductEvent.package_id == reason,
+                    ProductEvent.created_at >= since,
+                )
+            ).one()
 
         payment_started = s.exec(
             select(func.count()).select_from(Payment).where(Payment.created_at >= since)
@@ -286,6 +335,9 @@ def payment_path_diagnostics(
             "for_verified_channels": posts_for_verified,
             "for_unverified_channels": posts_for_unverified,
         },
+        # Плоские алиасы для Growth Agent (совместимость с _EXPECTED_FIELDS)
+        "post_generations_verified": posts_for_verified,
+        "post_generations_unverified": posts_for_unverified,
         "pricing_viewed": pricing_viewed,
         "payment_cta_clicked": payment_cta_clicked,
         "payment_started": payment_started,
@@ -296,6 +348,16 @@ def payment_path_diagnostics(
         "payment_returned": payment_returned,
         "quota_warning_seen": quota_warning_seen,
         "limit_reached": limit_reached,
+        # Онбординг: разбивка по выборам
+        "onboarding_choice_counts": {
+            "generate_first_post": onboarding_generate,
+            "analyze_existing_channel": onboarding_analyze,
+            "skip": onboarding_skip,
+        },
+        # Feedback по первому посту
+        "first_post_feedback_good": feedback_good,
+        "first_post_feedback_bad": feedback_bad,
+        "first_post_feedback_reasons": feedback_reasons,
         "conversion_steps": steps,
         "biggest_dropoff": dropoff,
         "likely_explanation": likely_explanation,
