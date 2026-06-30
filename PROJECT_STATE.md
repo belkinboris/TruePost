@@ -1,10 +1,10 @@
 # PROJECT_STATE
 
-**Last updated:** 2026-06-30
-**Current production status:** Attribution tracking реализован и протестирован end-to-end (26/26 тестов проходят, включая регрессионные). Готов к деплою перед запуском Telegram Ads.
-**Current priority:** Задеплоить attribution tracking. После деплоя — прогнать оба проверочных сценария из задачи на реальном проде (UTM-ссылка на лендинг + /start у бота), затем можно запускать Telegram Ads.
-**Do not touch now:** Direct bids, Direct budget, тарифы/цены, free quota, лендинг-тексты, реклама, UX, payment logic, product funnel logic.
-**Next task:** 1) Деплой. 2) Открыть `https://autopost26.up.railway.app/landing?utm_source=telegram_ads&utm_medium=cpc&utm_campaign=test&utm_content=test_ad`, пройти лендинг → регистрацию → создание канала → генерацию, проверить `source_breakdown.telegram_ads` в diagnostics. 3) То же для `https://t.me/maintrpost_bot?start=tgads_test_testad`. 4) После подтверждения обоих сценариев — можно запускать Telegram Ads.
+**Last updated:** 2026-06-30 (session 2: per-user journeys)
+**Current production status:** Attribution tracking + per-user journey endpoint реализованы и протестированы end-to-end (34/34 тестов проходят, включая полную регрессию). Готовы к деплою.
+**Current priority:** Задеплоить обе фичи этой сессии (attribution tracking + /api/internal/user-journeys). После деплоя — прогнать проверочные сценарии на проде.
+**Do not touch now:** Direct bids, Direct budget, тарифы/цены, free quota, лендинг-тексты, реклама, UX, payment logic, product funnel logic, персональные данные пользователей.
+**Next task:** 1) Деплой. 2) Проверить оба сценария attribution на проде (UTM-лендинг + /start у бота). 3) Дать Growth Agent доступ к `/api/internal/user-journeys` для построения per-user диагностики "на чём застрял".
 
 ---
 
@@ -97,13 +97,43 @@ Invoke-RestMethod -Uri "https://autopost26.up.railway.app/api/internal/payment-p
 
 ---
 
+## 3b. Growth Agent / Per-user journeys (НОВОЕ, 2026-06-30 сессия 2)
+
+**Done:**
+- **Новый internal endpoint** `GET /api/internal/user-journeys?period_hours=24&limit=100` (новый файл `internal_user_journeys.py`).
+- Возвращает per-user воронку для пользователей со значимым событием за период (регистрация, любой ProductEvent, или Payment попадающие в период). Если у юзера событие сегодня, но регистрация была месяц назад -- вся история юзера всё равно показывается (это намеренно: застревание часто произошло задолго до периода).
+- **Анонимизация:** `user_key = "u_" + sha256(INTERNAL_API_TOKEN + ":" + user_id)[:8]` -- стабильный в рамках одного значения токена, необратимый, не email/username/телефон. Меняется при ротации токена (приемлемо, см. docstring).
+- **Никаких персональных данных:** email, tg_username, tg_chat_id, password нигде не читаются и не возвращаются. Не использует и не импортирует `Post` вообще -- значит физически не может прочитать тексты постов или использовать сырое количество генераций как сигнал.
+- **events в journey:** registered_at, channel_created_at (самый ранний канал на юзера), onboarding_choice (+ at), first_post_feedback + reason (+ at), pricing_viewed_at, payment_cta_clicked_at, payment_started_at, payment_success_at, payment_failed_at.
+- **source attribution:** source/utm_source/utm_campaign/utm_content -- по той же TrafficAttribution что и в payment-path diagnostics.
+- **last_step:** строгий порядок шагов (registered → channel_created → onboarding_selected → first_post_feedback_good/bad → pricing_viewed → payment_started → payment_failed → payment_success), последний непустой шаг в этом порядке.
+- **stuck_at:** грубая бизнес-классификация (after_registration / after_channel_created / after_first_post / tariff_screen / payment_path / paid / unknown) -- НЕ использует post_generations как сигнал, явно проверено тестом #7 (статическая проверка что модуль не импортирует `Post`).
+- **minutes_since_last_step:** минуты с момента последнего известного события (максимум среди всех непустых timestamp'ов).
+- N+1 защита: данные тянутся пакетно (`.in_(candidate_ids)`) для Channel/ProductEvent/Payment/TrafficAttribution, не точечными запросами в цикле -- безопасно при `limit=500`.
+
+**Tested:**
+- `test_user_journeys.py` (8 тестов): требует токен, не отдаёт PII, содержит source attribution, корректные stuck_at для tariff_screen/payment_path/paid, статическая проверка отсутствия Post-импорта, регрессия payment-path-diagnostics.
+- Полный регрессионный прогон: 8 + 9 + 9 + 8 = **34/34 теста прошли** через реальный HTTP-сервер.
+- Ручная проверка: регистрация + onboarding_choice + pricing_viewed → корректный `last_step="pricing_viewed"`, `stuck_at="tariff_screen"`. Payment(status="pending") → `stuck_at="payment_path"`. Payment(status="paid") → `stuck_at="paid"`, `last_step="payment_success"`.
+
+**Какие события реально доступны сейчас:**
+registration, channel_created, onboarding_choice, first_post_feedback, first_post_feedback_reason, pricing_viewed, payment_cta_clicked, payment_started, payment_success, payment_failed -- все 10 из задачи присутствуют и подтверждены тестами.
+
+**Каких событий нет (честно null, не выдумано):**
+Нет отдельного события "канал верифицирован/подключён бот" в journey (только дата создания канала, не дата `Channel.verified=True`) -- если понадобится отдельно отслеживать момент верификации, потребуется либо новое ProductEvent, либо чтение `Channel.verified` с историей (сейчас это просто boolean без timestamp смены). Это сознательно не добавлено в эту итерацию -- не было в списке 10 событий из задачи.
+
+**Do not touch:** Этот endpoint read-only, не модифицирует никакие данные пользователя.
+
+---
+
 ## 4. Product Observer / QA Agent
 
 **Тесты:**
 - `test_quickstart_flow.py`, `test_topic_validation.py`
 - `test_payment_path_diagnostics.py` (8 тестов)
 - `test_onboarding_feedback.py` (9 тестов)
-- **НОВОЕ:** `test_attribution.py` (9 тестов)
+- `test_attribution.py` (9 тестов)
+- **НОВОЕ:** `test_user_journeys.py` (8 тестов)
 
 **Команда полного прогона:**
 ```bash
@@ -113,6 +143,7 @@ sleep 3
 BASE_URL=http://localhost:8400 TRUEPOST_INTERNAL_API_TOKEN=test-token python3 test_payment_path_diagnostics.py
 BASE_URL=http://localhost:8400 TRUEPOST_INTERNAL_API_TOKEN=test-token python3 test_onboarding_feedback.py
 BASE_URL=http://localhost:8400 TRUEPOST_INTERNAL_API_TOKEN=test-token python3 test_attribution.py
+BASE_URL=http://localhost:8400 TRUEPOST_INTERNAL_API_TOKEN=test-token python3 test_user_journeys.py
 ```
 
 ---
@@ -152,7 +183,19 @@ BASE_URL=http://localhost:8400 TRUEPOST_INTERNAL_API_TOKEN=test-token python3 te
 
 ## 8. Recently Fixed
 
-**Date:** 2026-06-30
+**Date:** 2026-06-30 (сессия 2)
+**Area:** Growth Agent / Per-user journeys
+**Changed:**
+- Новый файл `internal_user_journeys.py` — endpoint `GET /api/internal/user-journeys`.
+- Подключён в `main.py` рядом с `payment_path_router`.
+- Анонимизация через `user_key = "u_" + sha256(token + user_id)[:8]`.
+- Явно не импортирует `Post` — структурная защита от использования raw post_generations как сигнала состояния воронки.
+**Retested:** 8 новых тестов (`test_user_journeys.py`) + полный регрессионный прогон 34/34 (все предыдущие наборы тестов) — все прошли через реальный HTTP-сервер.
+**Result:** Готово к деплою.
+
+---
+
+**Date:** 2026-06-30 (сессия 1)
 **Area:** Growth Agent / Attribution tracking перед Telegram Ads
 **Changed:**
 - Новая таблица `TrafficAttribution` (database.py).
@@ -183,7 +226,15 @@ BASE_URL=http://localhost:8400 TRUEPOST_INTERNAL_API_TOKEN=test-token python3 te
 
 ## 9. Decisions
 
-**Date:** 2026-06-30
+**Date:** 2026-06-30 (сессия 2)
+**Decision:** `user_key` для per-user journeys генерируется как `sha256(INTERNAL_API_TOKEN + ":" + user_id)[:8]`, не просто `sha256(user_id)`.
+**Reason:** Использование токена как соли защищает от того, что внешний наблюдатель сможет вычислить user_key зная только user_id (публично не вычислимый хэш). Побочный эффект: при ротации токена user_key всех пользователей меняется — это приемлемо, Growth Agent не хранит долгую историю по user_key между ротациями.
+
+**Date:** 2026-06-30 (сессия 2)
+**Decision:** `internal_user_journeys.py` физически не импортирует модель `Post` — не просто "не использует в формуле", а структурно не может прочитать тексты постов или количество генераций.
+**Reason:** Задача явно требовала не использовать raw post_generations как сигнал engagement. Структурный запрет (отсутствие импорта) надёжнее, чем "просто не написать код, который это делает" — тест #7 в test_user_journeys.py проверяет это статически.
+
+**Date:** 2026-06-30 (сессия 1)
 **Decision:** Источник трафика хранится в отдельной таблице `TrafficAttribution`, не добавляется как колонка в `User`.
 **Reason:** Не трогать существующую схему User (ALTER TABLE запрещён по существующему решению), плюс позволяет хранить несколько точек захвата атрибуции без конфликтов.
 
