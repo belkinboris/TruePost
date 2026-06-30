@@ -12,7 +12,7 @@ import config
 import generator
 import research
 import telegram_api
-from database import session, Channel, ChannelRule, Source, Post, User
+from database import session, Channel, ChannelRule, Source, Post, User, TrafficAttribution
 from sqlmodel import select
 
 logger = logging.getLogger(__name__)
@@ -528,6 +528,40 @@ async def _process_main_bot_updates():
             continue
         _main_bot_last_reply[chat_id] = now
 
+        # Attribution: /start <param> может содержать рекламную метку
+        # (tgads_<campaign>_<content> для Telegram Ads). Если распознан --
+        # сохраняем источник трафика ДО регистрации (user_id ещё нет),
+        # привязка к user_id произойдёт позже в /api/register по тому же
+        # lp_session, если пользователь дойдёт до регистрации через Mini App.
+        # Не блокирует приветствие при сбое -- та же безопасная схема что
+        # остальные диагностические записи в проекте.
+        mini_app_url = config.PUBLIC_URL
+        parts = text.strip().split(maxsplit=1)
+        start_param = parts[1].strip() if len(parts) > 1 else ""
+        if start_param:
+            try:
+                from attribution import classify_start_param
+                src, med, campaign, content = classify_start_param(start_param)
+                if src != "unknown":
+                    lp_session = f"tg{chat_id}_{int(now)}"
+                    with session() as s:
+                        s.add(TrafficAttribution(
+                            landing_session_id=lp_session,
+                            source=src,
+                            medium=med,
+                            campaign=campaign[:100],
+                            content=content[:100],
+                            raw_start_param=start_param[:200],
+                        ))
+                        s.commit()
+                    # Прокидываем lp_session в Mini App, чтобы веб-часть
+                    # (captureLandingSession в app.js) подхватила её и
+                    # передала на /api/register -- тогда регистрация
+                    # привяжется к этой же TrafficAttribution записи.
+                    mini_app_url = f"{config.PUBLIC_URL}?lp_session={lp_session}"
+            except Exception:
+                logger.warning("main_bot /start: attribution parsing failed", exc_info=True)
+
         # Кнопка типа web_app открывает именно Mini App (не внешний браузер) —
         # это единственный программный способ гарантировать одно нажатие на
         # Android и iOS одинаково. Обычная url-кнопка открыла бы системный
@@ -537,7 +571,7 @@ async def _process_main_bot_updates():
             "text": "👋 Привет! АвтоПост пишет посты для вашего Telegram-канала и помогает публиковать их по расписанию.\n\nНажмите кнопку ниже, чтобы открыть приложение.",
             "reply_markup": {
                 "inline_keyboard": [[
-                    {"text": "Открыть АвтоПост", "web_app": {"url": config.PUBLIC_URL}}
+                    {"text": "Открыть АвтоПост", "web_app": {"url": mini_app_url}}
                 ]]
             }
         }, token=config.MAIN_BOT_TOKEN)

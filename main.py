@@ -26,7 +26,9 @@ import tasks
 from database import (
     init_db, session,
     User, Channel, Source, Post, Payment, Referral, LandingEvent, IdempotencyKey, ProductEvent,
+    TrafficAttribution,
 )
+from attribution import classify_utm
 from pydantic import BaseModel as _BaseModel
 from typing import Optional as _Opt
 
@@ -207,6 +209,45 @@ def register(data: AuthIn):
             except Exception:
                 pass
 
+        # Attribution: источник трафика для разделения Telegram Ads / Yandex
+        # Direct / organic перед запуском Telegram Ads. Не блокирует
+        # регистрацию при сбое -- та же безопасная схема что LandingEvent выше.
+        try:
+            linked = False
+            if data.lp_session:
+                # Сначала пробуем привязать уже существующую запись по той же
+                # сессии (могла быть создана раньше: на /api/landing-event
+                # landing_view с UTM, либо ботом при /start tgads_*). Так не
+                # плодим дублирующие TrafficAttribution на одну сессию.
+                existing = s.exec(
+                    select(TrafficAttribution).where(
+                        TrafficAttribution.landing_session_id == data.lp_session[:64],
+                        TrafficAttribution.user_id == None,  # noqa: E711
+                    )
+                ).first()
+                if existing:
+                    existing.user_id = user.id
+                    s.add(existing)
+                    s.commit()
+                    linked = True
+
+            if not linked and data.utm_source:
+                # Запасной путь: UTM пришли прямо с формы регистрации, но
+                # записи в TrafficAttribution по сессии ещё не было (например
+                # landing_view не успел отправиться, или session_id не дошёл).
+                src, med = classify_utm(data.utm_source, data.utm_medium)
+                s.add(TrafficAttribution(
+                    user_id=user.id,
+                    landing_session_id=(data.lp_session[:64] if data.lp_session else None),
+                    source=src,
+                    medium=med,
+                    campaign=(data.utm_campaign or "")[:100],
+                    content=(data.utm_content or "")[:100],
+                ))
+                s.commit()
+        except Exception:
+            pass
+
         # Начисляем бонус рефереру
         if referrer:
             referrer_obj = s.get(User, referrer.id)
@@ -235,6 +276,7 @@ class _LandingEventIn(_BaseModel):
     utm_source: str = ""
     utm_medium: str = ""
     utm_campaign: str = ""
+    utm_content: str = ""
     yclid: str = ""
     user_agent: str = ""
 
@@ -279,6 +321,26 @@ def landing_event(data: _LandingEventIn, request: Request):
                 yclid=(data.yclid or "")[:100],
                 user_agent=ua[:300],
             ))
+            # Attribution: фиксируем источник трафика как можно раньше (на
+            # первом событии лендинга с UTM), без user_id -- привязка к
+            # user_id произойдёт позже в /api/register по тому же session_id.
+            # Пишем только один раз на сессию (landing_view -- первое событие
+            # пути), чтобы не плодить дублирующие записи на каждый клик.
+            if data.event == "landing_view" and data.utm_source:
+                already = s.exec(
+                    select(TrafficAttribution).where(
+                        TrafficAttribution.landing_session_id == data.session_id[:64]
+                    )
+                ).first()
+                if not already:
+                    src, med = classify_utm(data.utm_source, data.utm_medium)
+                    s.add(TrafficAttribution(
+                        landing_session_id=data.session_id[:64],
+                        source=src,
+                        medium=med,
+                        campaign=(data.utm_campaign or "")[:100],
+                        content=(data.utm_content or "")[:100],
+                    ))
             s.commit()
     except Exception:
         pass

@@ -9,7 +9,8 @@ class AuthIn(BaseModel):
     utm_source: str = ""
     utm_medium: str = ""
     utm_campaign: str = ""
-    lp_session: str = ""  # landing_session_id для CTA/Journey Diagnostics -- не сохраняется в User, только в LandingEvent
+    utm_content: str = ""
+    lp_session: str = ""  # landing_session_id для CTA/Journey Diagnostics -- не сохраняется в User, только в LandingEvent/TrafficAttribution
 
 
 class ChannelIn(BaseModel):

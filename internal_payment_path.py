@@ -27,7 +27,7 @@ from fastapi import APIRouter, Header, HTTPException
 from sqlmodel import select, func
 
 import database
-from database import User, Channel, Post, Payment, ProductEvent
+from database import User, Channel, Post, Payment, ProductEvent, TrafficAttribution
 
 router = APIRouter()
 
@@ -104,6 +104,106 @@ EVENT_MAP = [
         "is_backend_fact": True,
     },
 ]
+
+# Источники, которые показываются в source_breakdown явными ключами.
+# Любой другой source (vk, mailto, custom utm_source и т.д.) попадает в "other".
+_KNOWN_SOURCES = ["telegram_ads", "yandex_direct", "direct", "unknown"]
+
+
+def _source_breakdown(s, since) -> dict:
+    """
+    Разбивка ключевых метрик воронки по источнику трафика (TrafficAttribution).
+
+    Перед запуском Telegram Ads нужно отличать telegram_ads от yandex_direct
+    от organic/unknown -- иначе обе рекламные кампании сольются в общие цифры
+    и нельзя будет понять, какая реклама реально работает.
+
+    Источник пользователя определяется по TrafficAttribution.user_id (см.
+    /api/register пишет туда source/medium/campaign/content при наличии UTM
+    или Telegram start-параметра, см. attribution.py). Пользователи без
+    TrafficAttribution записи (старые аккаунты, прямой заход без меток)
+    считаются source='unknown' -- это нормально и ожидаемо, см. задачу.
+
+    Намеренно не включает данные о кликах/показах из рекламных кабинетов
+    (eLama для Telegram Ads, Yandex Direct API) -- этот endpoint считает
+    только события ПОСЛЕ перехода/регистрации в самом AutoPost.
+    """
+    # user_id -> source, для всех юзеров у кого есть TrafficAttribution
+    attrib_rows = s.exec(
+        select(TrafficAttribution.user_id, TrafficAttribution.source).where(
+            TrafficAttribution.user_id != None  # noqa: E711
+        )
+    ).all()
+    user_source = {}
+    for user_id, source in attrib_rows:
+        # Если на одного user_id почему-то несколько записей (теоретически
+        # не должно происходить при текущей логике /api/register, но не
+        # доверяем этому слепо) -- берём первую найденную, не перезаписываем.
+        if user_id not in user_source:
+            user_source[user_id] = source if source in _KNOWN_SOURCES else "other"
+
+    def _bucket_for(user_id: int | None) -> str:
+        if user_id is None:
+            return "unknown"
+        return user_source.get(user_id, "unknown")
+
+    breakdown = {src: {
+        "registrations": 0, "channels_created": 0, "post_generations": 0,
+        "pricing_viewed": 0, "payment_cta_clicked": 0, "payment_started": 0, "payment_success": 0,
+    } for src in (_KNOWN_SOURCES + ["other"])}
+
+    # Регистрации за период, с их источником
+    user_ids_in_period = set(s.exec(select(User.id).where(User.created_at >= since)).all())
+    for uid in user_ids_in_period:
+        breakdown[_bucket_for(uid)]["registrations"] += 1
+
+    if not user_ids_in_period:
+        return breakdown
+
+    # Каналы за период, по user_id владельца
+    channels = s.exec(
+        select(Channel.user_id).where(Channel.created_at >= since)
+    ).all()
+    for uid in channels:
+        if uid in user_ids_in_period:
+            breakdown[_bucket_for(uid)]["channels_created"] += 1
+
+    # Генерации постов за период, по user_id
+    posts = s.exec(
+        select(Post.user_id).where(Post.created_at >= since)
+    ).all()
+    for uid in posts:
+        if uid in user_ids_in_period:
+            breakdown[_bucket_for(uid)]["post_generations"] += 1
+
+    # ProductEvent (pricing_viewed, payment_cta_clicked) -- по user_id
+    for event_name, key in [
+        ("pricing_viewed", "pricing_viewed"),
+        ("payment_cta_clicked", "payment_cta_clicked"),
+    ]:
+        rows = s.exec(
+            select(ProductEvent.user_id).where(
+                ProductEvent.event == event_name, ProductEvent.created_at >= since,
+                ProductEvent.user_id != None,  # noqa: E711
+            )
+        ).all()
+        for uid in rows:
+            if uid in user_ids_in_period:
+                breakdown[_bucket_for(uid)][key] += 1
+
+    # Payment (payment_started = создан, payment_success = status paid)
+    payments = s.exec(
+        select(Payment.user_id, Payment.status).where(Payment.created_at >= since)
+    ).all()
+    for uid, status in payments:
+        if uid not in user_ids_in_period:
+            continue
+        bucket = breakdown[_bucket_for(uid)]
+        bucket["payment_started"] += 1
+        if status == "paid":
+            bucket["payment_success"] += 1
+
+    return breakdown
 
 
 def _period_start(period_hours: int) -> datetime:
@@ -281,6 +381,11 @@ def payment_path_diagnostics(
             )
         ).one()
 
+        # Attribution: разбивка ключевых метрик по источнику трафика.
+        # Перед запуском Telegram Ads -- чтобы не слить telegram_ads и
+        # yandex_direct в общие цифры.
+        source_breakdown = _source_breakdown(s, since)
+
     counts = {
         "registrations": registrations,
         "channels_created": channels_created,
@@ -358,6 +463,12 @@ def payment_path_diagnostics(
         "first_post_feedback_good": feedback_good,
         "first_post_feedback_bad": feedback_bad,
         "first_post_feedback_reasons": feedback_reasons,
+        # Attribution: разбивка по источнику трафика (см. attribution.py,
+        # TrafficAttribution). Перед запуском Telegram Ads -- основной
+        # инструмент чтобы не слить telegram_ads и yandex_direct в общие
+        # цифры. Источники без атрибуции (старые юзеры, organic) попадают
+        # в "unknown" -- это нормально, см. задачу по attribution tracking.
+        "source_breakdown": source_breakdown,
         "conversion_steps": steps,
         "biggest_dropoff": dropoff,
         "likely_explanation": likely_explanation,
@@ -367,6 +478,7 @@ def payment_path_diagnostics(
             "backend_db": "User, Channel, Post, Payment -- прямой backend-факт",
             "product_events": "ProductEvent (pricing_viewed, payment_cta_clicked, payment_failed, payment_returned, quota_warning_seen, limit_reached, onboarding_choice_selected, first_post_feedback, first_post_feedback_reason) -- диагностика",
             "payment_success_status": "Payment.status == 'paid' (не 'succeeded' -- webhook записывает 'paid' в нашу БД)",
-            "not_included": "Yandex Direct / Telegram Ads атрибуция, Метрика goal counts -- не входит намеренно",
+            "traffic_attribution": "TrafficAttribution (source/medium/campaign/content) -- источник трафика по UTM (веб) или /start параметру (Telegram), см. source_breakdown. Пользователи без записи считаются 'unknown'.",
+            "not_included": "Клики/показы из рекламных кабинетов (eLama для Telegram Ads, Yandex Direct API) -- этот endpoint считает только события AutoPost после перехода/регистрации, не рекламную статистику.",
         },
     }

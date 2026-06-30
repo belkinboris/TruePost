@@ -171,6 +171,42 @@ class ProductEvent(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
 
 
+class TrafficAttribution(SQLModel, table=True):
+    """
+    Источник трафика пользователя -- для разделения Telegram Ads vs Yandex
+    Direct vs organic перед запуском Telegram Ads.
+
+    Новая отдельная таблица (та же безопасная схема что LandingEvent/
+    ProductEvent/IdempotencyKey): создаётся через create_all(), без ALTER
+    TABLE на User или других существующих таблицах. User не трогаем.
+
+    Источник определяется ДО регистрации (на лендинге через UTM, или в
+    Telegram через /start параметр) и сохраняется здесь либо сразу с
+    user_id (если регистрация уже произошла), либо позже привязывается
+    к user_id по landing_session_id когда пользователь регистрируется.
+
+    source: telegram_ads / yandex_direct / direct / unknown
+    medium: cpc / organic / unknown
+    campaign: utm_campaign либо campaign-часть start-параметра
+    content: utm_content либо creative-часть start-параметра
+    raw_start_param: сырой текст после /start (для отладки разбора, не
+        показывается владельцу в обычных сообщениях -- только в diagnostics)
+
+    Read-only снаружи: пишется через POST /api/landing-event (расширенный)
+    и при /start у @maintrpost_bot, читается через source_breakdown в
+    GET /api/internal/payment-path-diagnostics.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_id: Optional[int] = Field(default=None, index=True)
+    landing_session_id: Optional[str] = Field(default=None, index=True)
+    source: str = "unknown"   # telegram_ads / yandex_direct / direct / unknown
+    medium: str = "unknown"   # cpc / organic / unknown
+    campaign: str = ""
+    content: str = ""
+    raw_start_param: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow, index=True)
+
+
 class IdempotencyKey(SQLModel, table=True):
     """
     Защита от дублей при quick start (task item E): клиент генерирует
