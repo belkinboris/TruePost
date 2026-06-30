@@ -110,6 +110,9 @@ app.include_router(schema_diag_router)
 from internal_payment_path import router as payment_path_router
 app.include_router(payment_path_router)
 
+from internal_user_journeys import router as user_journeys_router
+app.include_router(user_journeys_router)
+
 # ── Авторизация ───────────────────────────────────────────────
 
 def current_user(authorization: str = Header(default="")) -> User:
