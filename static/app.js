@@ -57,8 +57,9 @@ function captureLandingSession(){
         utm_source:params.get("utm_source")||"",
         utm_medium:params.get("utm_medium")||"",
         utm_campaign:params.get("utm_campaign")||"",
+        utm_content:params.get("utm_content")||"",
       };
-      if(utm.utm_source||utm.utm_medium||utm.utm_campaign){
+      if(utm.utm_source||utm.utm_medium||utm.utm_campaign||utm.utm_content){
         localStorage.setItem("ap_lp_utm",JSON.stringify(utm));
       }
       logLandingEventWeb("web_register_opened");
@@ -98,6 +99,7 @@ function logLandingEventWeb(eventName){
         utm_source:utm.utm_source||"",
         utm_medium:utm.utm_medium||"",
         utm_campaign:utm.utm_campaign||"",
+        utm_content:utm.utm_content||"",
         user_agent:navigator.userAgent||"",
       }),
       keepalive:true,
@@ -300,6 +302,7 @@ function renderAuth(mode="login"){
           if(utm.utm_source) body.utm_source=utm.utm_source;
           if(utm.utm_medium) body.utm_medium=utm.utm_medium;
           if(utm.utm_campaign) body.utm_campaign=utm.utm_campaign;
+          if(utm.utm_content) body.utm_content=utm.utm_content;
         }
       }catch(_){}
     }

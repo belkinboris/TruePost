@@ -196,6 +196,7 @@
           utm_source: params.get('utm_source') || '',
           utm_medium: params.get('utm_medium') || '',
           utm_campaign: params.get('utm_campaign') || '',
+          utm_content: params.get('utm_content') || '',
           yclid: params.get('yclid') || ''
         };
         if (fresh.utm_source || fresh.yclid) {
@@ -227,6 +228,7 @@
           utm_source: utm.utm_source || '',
           utm_medium: utm.utm_medium || '',
           utm_campaign: utm.utm_campaign || '',
+          utm_content: utm.utm_content || '',
           yclid: utm.yclid || '',
           user_agent: navigator.userAgent || ''
         };
@@ -255,6 +257,7 @@
         if (utm.utm_source) qs.set('utm_source', utm.utm_source);
         if (utm.utm_medium) qs.set('utm_medium', utm.utm_medium);
         if (utm.utm_campaign) qs.set('utm_campaign', utm.utm_campaign);
+        if (utm.utm_content) qs.set('utm_content', utm.utm_content);
         url = '/?' + qs.toString();
       }
 
