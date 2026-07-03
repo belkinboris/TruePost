@@ -113,9 +113,6 @@ app.include_router(payment_path_router)
 from internal_user_journeys import router as user_journeys_router
 app.include_router(user_journeys_router)
 
-from internal_user_events import router as user_events_router
-app.include_router(user_events_router)
-
 # ── Авторизация ───────────────────────────────────────────────
 
 def current_user(authorization: str = Header(default="")) -> User:
@@ -374,6 +371,13 @@ _ALLOWED_PRODUCT_EVENTS = {
     # Причина недовольства первым постом (если first_post_feedback == bad).
     # package_id хранит: too_generic / wrong_style / wrong_topic / too_dry / too_salesy / other
     "first_post_feedback_reason",
+    # Эксперимент commercial_bridge (SPEC_TRUEPOST_QUEUE_OFFER): мост от
+    # хорошего первого поста к тарифам через предложение очереди на неделю.
+    # queue_offer_shown -- блок показан после good feedback.
+    # queue_offer_clicked -- клик по кнопке "Собрать очередь" (ведёт к тарифам).
+    # package_id пустой у обоих.
+    "queue_offer_shown",
+    "queue_offer_clicked",
 }
 
 

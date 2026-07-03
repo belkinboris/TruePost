@@ -307,6 +307,10 @@ def payment_path_diagnostics(
         quota_warning_seen = _count_product_event(s, "quota_warning_seen", since)
         limit_reached = _count_product_event(s, "limit_reached", since)
 
+        # Эксперимент commercial_bridge: конверсия моста "хороший пост -> тарифы"
+        queue_offer_shown = _count_product_event(s, "queue_offer_shown", since)
+        queue_offer_clicked = _count_product_event(s, "queue_offer_clicked", since)
+
         # Новые product events (онбординг + feedback)
         # Разбивка onboarding_choice_selected по package_id
         onboarding_generate = s.exec(
@@ -463,6 +467,10 @@ def payment_path_diagnostics(
         "first_post_feedback_good": feedback_good,
         "first_post_feedback_bad": feedback_bad,
         "first_post_feedback_reasons": feedback_reasons,
+        # Эксперимент commercial_bridge: мост good feedback -> тарифы.
+        # Конверсия моста = queue_offer_clicked / queue_offer_shown.
+        "queue_offer_shown": queue_offer_shown,
+        "queue_offer_clicked": queue_offer_clicked,
         # Attribution: разбивка по источнику трафика (см. attribution.py,
         # TrafficAttribution). Перед запуском Telegram Ads -- основной
         # инструмент чтобы не слить telegram_ads и yandex_direct в общие
