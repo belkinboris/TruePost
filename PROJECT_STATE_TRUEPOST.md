@@ -8,6 +8,18 @@
 
 ---
 
+## 0. Чек-лист деплоя
+
+Выполнять при каждом деплое:
+
+1. **Бампнуть версию app.js в index.html** — параметр `?v=` в строках `app.js?v=...` и `styles.css?v=...` (формат `vГГГГММДДбуква`, напр. `v=20260707a`). Без этого браузеры пользователей продолжат использовать закэшированный старый фронтенд — именно так события queue_offer и onboarding_choice месяц уходили в никуда.
+2. Прогнать полный набор тестов локально (команда в разделе 4).
+3. После деплоя: проверить Railway-логи на warning «product_event: отклонено событие» — это сигнал рассинхрона фронта и allowlist.
+4. Если менялись internal endpoints — проверить их PowerShell-командой из раздела 3.
+5. Если менялись переменные окружения — убедиться, что Railway перезапустил сервис (токены читаются при старте, не на каждый запрос).
+
+---
+
 ## 1. AutoPost Core Product
 
 **Scope:** registration/login; onboarding; first post generation; Telegram channel connection; publication; queue; autopublishing; settings; tariffs; delete account.
