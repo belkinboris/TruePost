@@ -1,10 +1,10 @@
 # PROJECT_STATE
 
-**Last updated:** 2026-07-03 (session 3: queue offer / commercial_bridge)
-**Current production status:** Attribution tracking + per-user journeys + блок «Собрать очередь на неделю» (эксперимент commercial_bridge) реализованы и протестированы. Готовы к деплою.
-**Current priority:** Задеплоить всё. После деплоя Growth Agent начинает считать конверсию моста (queue_offer_clicked / queue_offer_shown) и pricing_viewed/registrations против baseline. Порог вердикта: 14 новых регистраций или 14 дней.
-**Do not touch now:** generator.py и промпт первого поста, тарифы/цены/состав тарифов, onboarding до первого поста, реклама (Директ и Telegram Ads), лендинг — locked variables эксперимента commercial_bridge.
-**Next task:** 1) Деплой. 2) Проверить сценарии attribution на проде. 3) Наблюдать эксперимент commercial_bridge до порога вердикта.
+**Last updated:** 2026-07-07 (session 4: итерация генератора «не тот стиль» + фиксы трекинга)
+**Current production status:** Стилевая итерация generator.py (запрет снят: bad 75% > 40%), фиксы трекинга (обрезка package_id, кэш-бастер, логирование отклонённых событий), BUG-003 (медленная загрузка). Готово к деплою.
+**Current priority:** Задеплоить. Growth Agent считает вердикт по следующим 10 отзывам против baseline 25% good. После деплоя убедиться, что onboarding_choice события пошли (кэш-бастер v=20260707a заставит браузеры скачать свежий app.js).
+**Do not touch now:** onboarding-шаги (кроме добавленного опционального поля образцов), тарифы, цены, лендинг, реклама, логика очереди, лимиты, количество регенераций, антидефисы и структура абзацев в промпте — locked variables эксперимента «Чиним качество первого поста».
+**Next task:** 1) Деплой. 2) Проверить в Railway-логах отсутствие warning «отклонено событие». 3) Ждать 10 отзывов — вердикт Growth Agent автоматический.
 
 ---
 
@@ -182,6 +182,22 @@ BASE_URL=http://localhost:8400 TRUEPOST_INTERNAL_API_TOKEN=test-token python3 te
 ---
 
 ## 8. Recently Fixed
+
+**Date:** 2026-07-07 (сессия 4)
+**Area:** Generator / итерация «не тот стиль» (SPEC_TRUEPOST_GENERATOR_STYLE) + фиксы трекинга
+**Changed:**
+- `generator.py` (`generate_post`): (а) если `style_profile` начинается с маркера `[ОБРАЗЦЫ СТИЛЯ]` — блок стилевого зеркалирования («проанализируй лексику, длину абзацев, обращение, эмодзи, ритм… напиши НЕОТЛИЧИМЫМ по стилю, не копируй содержание»); (б) если стиля нет вообще — явный пресет тона по channel_type: «автор-эксперт» (thematic) или «новостной дайджест» (news) вместо среднего ИИ-тона; (в) обычный `style_profile` (анализ реального канала) — механизм проверен, подмешивается в system как раньше.
+- `schemas.py` (`ChannelIn`): новое опциональное поле `style_samples`.
+- `main.py` (`create_channel`): образцы сохраняются как `"[ОБРАЗЦЫ СТИЛЯ]\n" + samples` в существующее поле `style_profile` (без ALTER TABLE).
+- `static/app.js`: в quick start под темой — свёрнутый `<details>` «Вставить 1–2 своих поста как образец стиля (можно пропустить)», уходит в `POST /channels`.
+- **БАГ трекинга №1:** `product_event` обрезал `package_id` до 20 символов → `analyze_existing_channel` (24) хранился как `analyze_existing_cha`, diagnostics с `==` вечно видел 0. Лимит поднят до 40, diagnostics считает оба варианта (legacy-обрезанный тоже).
+- **БАГ трекинга №2 (вероятная главная причина «0 событий»):** кэш-бастер `app.js?v=20250609h` не обновлялся с 9 июня — браузеры пользователей держали старый app.js без экрана выбора. Бампнут до `v=20260707a`.
+- **Диагностика на будущее:** отклонённые allowlist'ом события теперь логируются warning'ом в Railway (раньше умирали молча с ok:False).
+- Queue_offer события проверены: в allowlist есть, тесты проходят — если в /funnel их не видно, причина тот же кэш-бастер.
+**Retested:** `test_generator_style.py` — 5 промпт-тестов (образцы→зеркалирование, пропуск→пресеты thematic/news, verified→профиль подмешан, ручной style отключает пресет). E2E через HTTP: образцы доходят до БД с маркером. Полная регрессия: onboarding 9/9, queue_offer 5/5, attribution 9/9, user_journeys 8/8, payment_path 8/8.
+**Result:** Готово к деплою. Откат: убрать блоки из промпта + скрыть `<details>` — один коммит.
+
+---
 
 **Date:** 2026-07-03 (сессия 3)
 **Area:** Core Product / Эксперимент commercial_bridge (SPEC_TRUEPOST_QUEUE_OFFER)

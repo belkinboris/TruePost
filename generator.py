@@ -283,8 +283,42 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
     cta_text = getattr(channel, "cta_text", "") or ""
 
     style_block = channel.style or ""
-    if channel.style_profile:
+    # Итерация "не тот стиль" (SPEC_TRUEPOST_GENERATOR_STYLE): если
+    # пользователь вставил свои посты как образец (маркер [ОБРАЗЦЫ СТИЛЯ]
+    # в style_profile, см. create_channel) -- строим блок стилевого
+    # зеркалирования вместо обычного "Профиль стиля".
+    style_mirror_block = ""
+    if channel.style_profile and channel.style_profile.startswith("[ОБРАЗЦЫ СТИЛЯ]"):
+        samples = channel.style_profile.removeprefix("[ОБРАЗЦЫ СТИЛЯ]").strip()[:3000]
+        style_mirror_block = f"""
+
+ОБРАЗЦЫ СТИЛЯ АВТОРА (реальные посты пользователя):
+{samples}
+
+Проанализируй лексику, длину абзацев, обращение (ты/вы), эмодзи, ритм этих постов и напиши новый пост НЕОТЛИЧИМЫМ по стилю. Не копируй содержание."""
+    elif channel.style_profile:
         style_block += f"\n\nПрофиль стиля:\n{channel.style_profile}"
+
+    # Если стиля нет ВООБЩЕ (не подключён канал, нет образцов, нет описания
+    # стиля) -- задаём явный пресет тона по типу канала, а не "нейтрально".
+    # Именно "средний ИИ-тон" без стилевой рамки давал 75% "не тот стиль".
+    tone_preset_block = ""
+    if not style_block.strip() and not style_mirror_block:
+        channel_type = getattr(channel, "channel_type", "thematic")
+        if channel_type == "news":
+            tone_preset_block = """
+
+ТОН (пресет "новостной дайджест"): пиши как живой редактор новостного
+канала -- коротко, по делу, с одной яркой деталью на пост. Без канцелярита,
+без "как известно". Разговорный, но собранный. Как будто пересказываешь
+новость умному другу за 30 секунд."""
+        else:
+            tone_preset_block = """
+
+ТОН (пресет "автор-эксперт"): пиши как человек, который реально живёт этой
+темой и ведёт канал для своих. От первого лица, с личным отношением к
+фактам. Живые формулировки, никакой энциклопедичности. Как будто делишься
+находкой с подписчиками, которых уважаешь."""
 
     cta_instruction = f'\nВ КОНЦЕ добавь призыв: «{cta_text.strip()}»' if cta_enabled and cta_text.strip() else ""
 
@@ -325,7 +359,7 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
     system = f"""Ты — автор Telegram-канала «{channel.title}».
 
 О КАНАЛЕ: {channel.about}
-{"СТИЛЬ: " + style_block if style_block.strip() else ""}
+{"СТИЛЬ: " + style_block if style_block.strip() else ""}{style_mirror_block}{tone_preset_block}
 ЯЗЫК: {channel.language}
 ДЛИНА: {channel.post_length}
 Голос: {voice if not is_humor else "зумерский"}
