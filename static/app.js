@@ -2547,7 +2547,7 @@ async function openTgConnect(){
     // Нет токена — пользователь не авторизован (например Mini App без localStorage)
     const twa = window.Telegram?.WebApp;
     if(twa && typeof twa.showAlert==='function'){
-      twa.showAlert("Войдите в аккаунт на сайте autopost26.up.railway.app, а затем откройте уведомления снова.");
+      twa.showAlert("Войдите в аккаунт на сайте autopost.projectsozdatel.ru, а затем откройте уведомления снова.");
     } else {
       toast("Не удалось определить аккаунт. Попробуйте войти заново.","err");
     }
@@ -2688,9 +2688,19 @@ async function boot(){
 
   captureLandingSession();
 
+  // КРИТИЧНО (BUG-003 fix): /config больше НЕ блокирует первый экран.
+  // App.cfg используется только с ?. и фолбэками (bot_username, флаги
+  // оплаты) — для первого рендера он не нужен. Раньше boot ждал ответа
+  // /config до показа ЧЕГО-ЛИБО, и при холодном старте Railway (контейнер
+  // спит после простоя, пробуждение 10-20 сек) пользователь всё это время
+  // видел «Загрузка…». Теперь конфиг грузится в фоне, а экран появляется
+  // сразу.
+  App.cfg = App.cfg || {packages:[]};
   const tConfigStart = performance.now();
-  try{App.cfg=await api("GET","/config");}catch(_){App.cfg={packages:[]};}
-  console.log(`[timing] /config: ${(performance.now()-tConfigStart).toFixed(0)}ms`);
+  api("GET","/config").then(cfg=>{
+    App.cfg=cfg;
+    console.log(`[timing] /config (background): ${(performance.now()-tConfigStart).toFixed(0)}ms`);
+  }).catch(_=>{});
 
   initCookieBanner();initKeyboardDismiss();
   if(!App.token){
@@ -2700,6 +2710,15 @@ async function boot(){
     console.log('[timing] first_screen_visible (renderAuth)');
     return;
   }
+
+  // BUG-003: пока /me грузится (при холодном старте Railway это может быть
+  // 10-20 сек), показываем живой скелет вместо статичного «Загрузка…» из
+  // index.html -- пользователь видит, что приложение работает, а не зависло.
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px;margin-top:60px;text-align:center">
+    <div style="font-size:28px;margin-bottom:12px">✦</div>
+    <p style="color:var(--text-dim)">Загружаем ваши каналы…</p>
+    <p style="color:var(--text-faint);font-size:13px;margin-top:8px">Первый запуск после паузы может занять до полуминуты.</p>
+  </div>`;
 
   try{ performance.mark('me_request_started'); }catch(_){}
   const tMeStart = performance.now();

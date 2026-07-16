@@ -2547,7 +2547,7 @@ async function openTgConnect(){
     // Нет токена — пользователь не авторизован (например Mini App без localStorage)
     const twa = window.Telegram?.WebApp;
     if(twa && typeof twa.showAlert==='function'){
-      twa.showAlert("Войдите в аккаунт на сайте autopost26.up.railway.app, а затем откройте уведомления снова.");
+      twa.showAlert("Войдите в аккаунт на сайте autopost.projectsozdatel.ru, а затем откройте уведомления снова.");
     } else {
       toast("Не удалось определить аккаунт. Попробуйте войти заново.","err");
     }
