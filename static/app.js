@@ -1,3 +1,4 @@
+const API_BASE=(typeof window!=="undefined"&&window.API_BASE)||"";
 window.onerror = function(msg, src, line, col, err) {
   document.body.innerHTML = '<div style="padding:20px;font-family:monospace;color:red">'
     + '<b>JS Error:</b><br>' + msg + '<br>Line: ' + line + '</div>';
@@ -89,7 +90,7 @@ function logLandingEventWeb(eventName){
     _sentLandingEvents.add(dedupKey);
 
     const utm=JSON.parse(localStorage.getItem("ap_lp_utm")||"{}");
-    fetch("/api/landing-event",{
+    fetch(API_BASE+"/api/landing-event",{
       method:"POST",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({
@@ -114,7 +115,7 @@ function logProductEvent(eventName, packageId){
   // действие пользователя, не показывает ошибку при сбое.
   try{
     if(!App.token) return;
-    fetch("/api/product-event",{
+    fetch(API_BASE+"/api/product-event",{
       method:"POST",
       headers:{"Content-Type":"application/json","Authorization":"Bearer "+App.token},
       body:JSON.stringify({event:eventName, package_id:packageId||""}),
@@ -167,7 +168,7 @@ async function api(method, path, body) {
   const hadToken = !!App.token;
   if (App.token) opts.headers["Authorization"]="Bearer "+App.token;
   if (body!==undefined){opts.headers["Content-Type"]="application/json";opts.body=JSON.stringify(body);}
-  const res=await fetch("/api"+path,opts);
+  const res=await fetch(API_BASE+"/api"+path,opts);
 
   let data=null;
   try{data=await res.json();}catch(_){}

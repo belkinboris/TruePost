@@ -11,6 +11,19 @@ except Exception:
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me-set-long-random-string")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+
+# === LLM-провайдер (миграция в РФ, план от 2026-07-17) ===
+# "anthropic" (по умолчанию, текущее поведение) или "yandex" (Alice AI /
+# Foundation Models в Yandex Cloud). Переключение одной переменной,
+# мгновенный откат. См. DEPLOY_NOTE и generator.py::_call_llm.
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic").strip().lower()
+YANDEX_API_KEY = os.getenv("YANDEX_API_KEY", "")       # Api-Key сервисного аккаунта Yandex Cloud
+YANDEX_FOLDER_ID = os.getenv("YANDEX_FOLDER_ID", "")   # id каталога (folder) в Yandex Cloud
+# URI модели. Точное имя модели Alice AI смотрим в консоли Foundation Models
+# и задаём через env; дефолт — актуальная général-модель каталога.
+YANDEX_MODEL_URI = os.getenv("YANDEX_MODEL_URI") or (
+    f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest" if YANDEX_FOLDER_ID else ""
+)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
 # @maintrpost_bot -- вход в Mini App (Main Mini App режим включён в BotFather).

@@ -191,7 +191,7 @@ async def classify_topic(topic: str) -> str:
     if len(topic) < 2:
         return "unclear_topic"
     try:
-        text, _ = await _call_claude(_TOPIC_CLASSIFY_SYSTEM, topic, use_web_search=False, max_tokens=20)
+        text, _ = await _call_llm(_TOPIC_CLASSIFY_SYSTEM, topic, use_web_search=False, max_tokens=20)
         text = (text or "").strip().lower()
         # Порядок важен: ambiguous_intimate_topic проверяем раньше valid_topic,
         # чтобы случайное совпадение подстроки не увело в неправильную категорию.
@@ -228,6 +228,107 @@ AMBIGUOUS_INTIMATE_CLARIFICATION = (
 def rejection_message(classification: str) -> str | None:
     """Готовое русское сообщение для отклонённой темы, либо None если тема валидна."""
     return _REJECTION_MESSAGES.get(classification)
+
+YANDEX_LLM_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+
+# Принудительный провайдер для internal-сравнения качества (см.
+# internal_llm_compare.py). None = использовать config.LLM_PROVIDER.
+FORCE_PROVIDER: str | None = None
+
+
+async def _call_yandex(system, messages, max_tokens=700):
+    """
+    Вызов Alice AI / Foundation Models (Yandex Cloud).
+    messages: [{"role": "user"|"assistant", "content": str}, ...]
+    Возвращает (text, tokens) — тот же контракт, что _call_claude.
+    Ограничение: web_search у Yandex API нет — вызывающий код должен
+    учитывать это сам (см. _call_llm).
+    """
+    if not config.YANDEX_API_KEY or not config.YANDEX_MODEL_URI:
+        raise GenerationError("Yandex LLM не настроен (YANDEX_API_KEY / YANDEX_FOLDER_ID).")
+    ya_messages = [{"role": "system", "text": system}] + [
+        {"role": m["role"], "text": m["content"]} for m in messages
+    ]
+    body = {
+        "modelUri": config.YANDEX_MODEL_URI,
+        "completionOptions": {"stream": False, "temperature": 0.6, "maxTokens": str(max_tokens)},
+        "messages": ya_messages,
+    }
+    headers = {"Authorization": f"Api-Key {config.YANDEX_API_KEY}", "Content-Type": "application/json"}
+
+    last_error = None
+    for attempt in range(3):
+        try:
+            async with httpx.AsyncClient(timeout=120) as client:
+                r = await client.post(YANDEX_LLM_URL, headers=headers, json=body)
+        except httpx.TimeoutException:
+            last_error = "timeout"
+            await asyncio.sleep(2 * (attempt + 1))
+            continue
+
+        if r.status_code < 400:
+            data = r.json()
+            try:
+                text = data["result"]["alternatives"][0]["message"]["text"]
+            except (KeyError, IndexError):
+                logger.error(f"Yandex LLM unexpected response: {str(data)[:500]}")
+                raise GenerationError("Неожиданный ответ ИИ. Попробуйте ещё раз.")
+            tokens = int(data.get("result", {}).get("usage", {}).get("totalTokens", 0) or 0)
+            return text, tokens
+
+        logger.error(f"Yandex LLM {r.status_code}: {r.text[:500]}")
+        if r.status_code == 429:
+            last_error = "overloaded"
+            await asyncio.sleep(3 * (attempt + 1))
+            continue
+        if r.status_code in (401, 403):
+            raise GenerationError("Ошибка авторизации ИИ. Обратитесь в поддержку.")
+        if r.status_code == 400:
+            raise GenerationError("Не удалось сгенерировать пост. Попробуйте изменить тему.")
+        last_error = f"http_{r.status_code}"
+        await asyncio.sleep(2)
+
+    if last_error == "overloaded":
+        raise GenerationError("Серверы ИИ сейчас перегружены. Попробуйте через минуту.")
+    if last_error == "timeout":
+        raise GenerationError("Превышено время ожидания. Попробуйте ещё раз.")
+    raise GenerationError("Временная ошибка ИИ. Попробуйте ещё раз через минуту.")
+
+
+async def _call_llm(system, user, use_web_search, max_tokens=700, messages=None):
+    """
+    Единая точка вызова LLM. Провайдер: config.LLM_PROVIDER
+    ("anthropic" | "yandex"), FORCE_PROVIDER перекрывает для internal-тестов.
+    user — строка (одиночное сообщение) ЛИБО messages — готовая история.
+    ВАЖНО: у Yandex нет web_search; в этом режиме генерируем без поиска
+    (новостные каналы — см. ограничение в DEPLOY_NOTE, фаза 1.5 —
+    интеграция Яндекс.Поиск API).
+    """
+    provider = FORCE_PROVIDER or config.LLM_PROVIDER
+    msgs = messages if messages is not None else [{"role": "user", "content": user}]
+    if provider == "yandex":
+        if use_web_search:
+            logger.warning("web_search недоступен у провайдера yandex — генерация без поиска")
+        return await _call_yandex(system, msgs, max_tokens=max_tokens)
+    # anthropic (по умолчанию)
+    if messages is not None:
+        return await _call_claude_messages(system, msgs, max_tokens=max_tokens)
+    return await _call_claude(system, user, use_web_search, max_tokens=max_tokens)
+
+
+async def _call_claude_messages(system, messages, max_tokens=700):
+    """История сообщений для Anthropic (используется consult)."""
+    body = {
+        "model": config.ANTHROPIC_MODEL,
+        "max_tokens": max_tokens,
+        "system": system,
+        "messages": messages,
+    }
+    async with httpx.AsyncClient(timeout=60) as client:
+        r = await client.post(ANTHROPIC_URL, headers=_headers(), json=body)
+        data = r.json()
+    return _extract_text(data), _usage_tokens(data)
+
 
 async def _call_claude(system, user, use_web_search, max_tokens=700):
     body = {
@@ -405,7 +506,7 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
     else:
         user_msg = f"Напиши пост на тему «{effective_topic}». Конкретный пример — человек, ситуация, деталь."
 
-    text, tokens = await _call_claude(system, user_msg, use_search, max_tokens=650)
+    text, tokens = await _call_llm(system, user_msg, use_search, max_tokens=650)
     cleaned = _clean_post(text)
     total_tokens = tokens
     fallback_used = "none"
@@ -417,7 +518,7 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
         logger.info(f"Канал {channel.id}: web_search дал отказ/вопрос вместо поста, fallback_used=no_search_retry")
         fallback_used = "no_search_retry"
         fallback_msg = f"Напиши пост на тему «{effective_topic}». Конкретный пример — человек, ситуация, деталь. Не нужно искать в интернете, пиши по своим знаниям. Пост должен быть строго про «{effective_topic}»."
-        text2, tokens2 = await _call_claude(system, fallback_msg, False, max_tokens=650)
+        text2, tokens2 = await _call_llm(system, fallback_msg, False, max_tokens=650)
         cleaned = _clean_post(text2)
         total_tokens += tokens2
 
@@ -433,7 +534,7 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
             logger.info(f"Канал {channel.id}: post-topic mismatch для темы «{effective_topic}», повторная генерация без поиска")
             fallback_used = "topic_mismatch_retry"
             retry_msg = f"Напиши пост СТРОГО на тему «{effective_topic}», не отклоняясь от неё. Конкретный пример — человек, ситуация, деталь. Не используй поиск в интернете."
-            text3, tokens3 = await _call_claude(system, retry_msg, False, max_tokens=650)
+            text3, tokens3 = await _call_llm(system, retry_msg, False, max_tokens=650)
             cleaned = _clean_post(text3)
             total_tokens += tokens3
 
@@ -452,7 +553,7 @@ async def _check_topic_match(post_text: str, topic: str) -> tuple[bool, int]:
     system = "Ответь ОДНИМ словом: YES если текст поста соответствует заданной теме (хотя бы по смыслу, не обязательно дословно), NO если пост явно про другую тему."
     user = f"Тема: «{topic}»\n\nТекст поста:\n{post_text[:600]}"
     try:
-        text, tokens = await _call_claude(system, user, False, max_tokens=10)
+        text, tokens = await _call_llm(system, user, False, max_tokens=10)
         return ("no" not in text.strip().lower()), tokens
     except Exception as e:
         logger.warning(f"Ошибка post-topic match check: {e}")
@@ -461,6 +562,12 @@ async def _check_topic_match(post_text: str, topic: str) -> tuple[bool, int]:
 
 async def check_news_available(channel: "Channel") -> tuple:
     """Проверяет есть ли свежие новости по теме. Возвращает (bool, tokens_used)."""
+    provider = FORCE_PROVIDER or config.LLM_PROVIDER
+    if provider == "yandex":
+        # У Yandex API нет web_search: проверить свежесть новостей нечем.
+        # Не блокируем цикл генерации (фаза 1.5 — Яндекс.Поиск API).
+        logger.warning("check_news_available: провайдер yandex без web_search — пропускаем проверку")
+        return True, 0
     system = "You are a news editor. Reply only YES or NO."
     user = (
         f"Topic: {channel.about}\n\n"
@@ -516,17 +623,7 @@ async def consult(channel: "Channel", user_message: str, history: list, rules_te
         messages.append({"role": h["role"], "content": h["content"]})
     messages.append({"role": "user", "content": user_message})
 
-    body = {
-        "model": config.ANTHROPIC_MODEL,
-        "max_tokens": 500,
-        "system": system,
-        "messages": messages,
-    }
-    async with httpx.AsyncClient(timeout=60) as client:
-        r = await client.post(ANTHROPIC_URL, headers=_headers(), json=body)
-        data = r.json()
-
-    response = _extract_text(data)
+    response, _ = await _call_llm(system, None, False, max_tokens=500, messages=messages)
 
     # Извлекаем правило если есть
     rule = None
@@ -548,4 +645,4 @@ async def analyze_style(posts: list[str]) -> tuple[str, int]:
         "длина предложений, начало/конец постов, характерные приёмы, что никогда не встречается.\n\n"
         + sample
     )
-    return await _call_claude(system, user, False, max_tokens=450)
+    return await _call_llm(system, user, False, max_tokens=450)

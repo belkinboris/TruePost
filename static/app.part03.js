@@ -1,0 +1,189 @@
+
+
+async function renderDashboard(){
+  // Skeleton сразу, без ожидания данных (task item 4 acceptance criteria:
+  // "dashboard shows skeleton/loader immediately, no blank screen").
+  $("app").innerHTML=`<div class="wrap"><div class="text-faint" style="padding:40px;text-align:center">Загрузка…</div></div>`;
+
+  const tUserStart = performance.now();
+  await refreshUser();
+  console.log(`[timing] refreshUser() в renderDashboard: ${(performance.now()-tUserStart).toFixed(0)}ms`);
+
+  let chans=[];
+  let channelsLoadFailed=false;
+  const tChansStart = performance.now();
+  try{
+    chans=await api("GET","/channels");
+  }catch(e){
+    channelsLoadFailed=true;
+    const msg=(e&&e.message)||"";
+    const isAuthFailure = msg.includes("Сессия истекла") || msg.includes("Не авторизован") || msg.includes("Пользователь не найден");
+    if(isAuthFailure){
+      // КРИТИЧНО (Task B fix): api() уже вызвал logout() сам для этого
+      // случая — здесь просто показываем экран входа и ВЫХОДИМ, не
+      // продолжаем выполнение. Раньше этот catch проглатывал ошибку молча,
+      // chans оставался пустым массивом, и код ниже интерпретировал это
+      // как "новый пользователь без каналов" -> показывал quick start.
+      // Реальная причина — истёкшая сессия, не отсутствие каналов. Это и
+      // была причина "quick start появляется неожиданно" + "не авторизован
+      // до hard reload": пользователь оказывался на quick start с мёртвым
+      // токеном, и любое защищённое действие там падало с 401 заново.
+      return renderAuth();
+    }
+    // Не auth-ошибка (сеть, временный сбой backend) — показываем тост,
+    // но НЕ показываем quick start как будто пользователь новый.
+    toast(msg||"Ошибка запроса","err");
+  }
+  console.log(`[timing] /channels: ${(performance.now()-tChansStart).toFixed(0)}ms, count=${chans.length}`);
+
+  if(channelsLoadFailed){
+    // Сеть/временный сбой — даём пользователю явный повтор, не выдаём
+    // молчаливый quick start или пустой дашборд.
+    $("app").innerHTML = `<div class="wrap" style="max-width:480px;text-align:center;margin-top:60px">
+      <p style="color:var(--text-dim)">Не удалось загрузить список каналов.</p>
+      <button class="btn" style="margin-top:12px" onclick="go('dashboard')">Попробовать снова</button>
+    </div>`;
+    return;
+  }
+
+  if(!chans.length){
+    if(App._onboardingSkipped){
+      // Пользователь явно нажал "Пропустить" — показываем пустой dashboard
+      // с явным призывом создать канал, не зацикливаем обратно на quick start.
+      $("app").innerHTML=topbar()+`<div class="wrap">
+        <div class="page-head"><h1>Твои каналы</h1><p>Пока нет ни одного канала.</p></div>
+        <div class="grid grid-3">
+          <div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
+            <div style="font-size:14px;font-weight:500">Новый канал</div></div>
+        </div>
+        <div id="dash_footer"></div></div>`;
+      const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
+      return;
+    }
+    return renderQuickStart(); // новый пользователь — сразу к первому посту, без пустого дашборда
+  }
+  $("app").innerHTML=topbar()+`<div class="wrap">
+    <div class="page-head"><h1>Твои каналы</h1><p>ИИ пишет посты сам — тебе только выбирать лучший.</p></div>
+    <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
+    <div id="dash_footer"></div></div>`;
+  const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
+  $("chans").innerHTML=chans.map(c=>{
+    const verified=c.verified?`<span class="chip chip-green">● подключён</span>`:`<span class="chip chip-orange">● не проверен</span>`;
+    return `<div class="chan-card" onclick="go('channel',${c.id})">
+      <h3>${esc(c.title)}</h3>
+      <div class="chan-handle">${esc(c.tg_chat||"не подключён")}</div>
+      <div class="chan-about">${esc(c.about)||"<span class='text-faint'>тема не задана</span>"}</div>
+      <div class="chan-foot">${verified}
+        <span class="chip chip-gray">🕑 ${_intervalLabel(c.interval_hours||12)}</span>
+        <span class="chip chip-blue">⏱ ${_nextGenerationLabel(c)}</span>
+      </div></div>`;
+  }).join("")+`<div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
+    <div style="font-size:14px;font-weight:500">Новый канал</div></div>`;
+}
+
+// ONBOARDING — переменные используются старой полной формой (renderNewChannel),
+// доступной из вкладки "Расширенные" внутри уже созданного канала.
+let _ncType="thematic";
+let _ncVoice="author",_ncFormat="story",_ncEmoji="minimal",_ncCta=false,_ncCtaText="",_ncHz=12,_ncStyleProfile="";
+
+// QUICK START — минимальный онбординг: тема -> первый пост, без подключения канала
+function renderQuickStart(){
+  trackGoal("quick_start_viewed");
+
+  // КРИТИЧНО (P0 fix, task item 1): каждый новый quick start начинается с
+  // полностью чистого состояния.
+  App._qsRequestId = "qs" + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+  App.channelId = null;
+  App._qsAbout = "";
+  App._chan = null;
+
+  // Экран выбора: что делать сначала?
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <button class="back-link" style="margin-top:12px" onclick="qsSkip()">Пропустить →</button>
+    <div class="page-head" style="text-align:center;margin-top:8px">
+      <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">Что сделать сначала?</h1>
+      <p style="color:var(--text-dim)">Выберите — с чего начнём</p>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-top:24px">
+      <button class="btn" style="width:100%;justify-content:center;padding:16px;font-size:16px"
+        onclick="qsChooseGenerate()">Сгенерировать первый пост</button>
+      <button onclick="qsChooseAnalyze()"
+        style="width:100%;padding:16px;font-size:16px;border-radius:10px;border:1.5px solid var(--border);background:var(--surface);cursor:pointer;font-family:inherit;color:var(--text)">
+        Проанализировать мой Telegram-канал
+      </button>
+    </div>
+    <div style="text-align:center;margin-top:20px">
+      <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="qsSkip()">Пропустить</button>
+    </div>
+  </div>`;
+}
+
+function qsChooseGenerate(){
+  logProductEvent("onboarding_choice_selected", "generate_first_post");
+  renderQuickStartGenerate();
+}
+
+function qsChooseAnalyze(){
+  logProductEvent("onboarding_choice_selected", "analyze_existing_channel");
+  // Безопасный первый шаг: запросить @username канала.
+  // Не обещаем полноценный анализ — показываем что принято к сведению
+  // и переходим к генерации с подсказкой темы из имени канала.
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <button class="back-link" style="margin-top:12px" onclick="renderQuickStart()">← Назад</button>
+    <div class="page-head" style="text-align:center;margin-top:8px">
+      <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Ваш канал</h1>
+      <p style="color:var(--text-dim)">Укажите @username или ссылку на канал</p>
+    </div>
+    <div class="card">
+      <input id="qs_channel_link" placeholder="@mychannel или t.me/mychannel" style="font-size:15px;width:100%">
+    </div>
+    <p style="color:var(--text-faint);font-size:13px;margin-top:8px;text-align:center">
+      Сгенерируем пример поста в стиле вашего канала.
+    </p>
+    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+      onclick="qsAnalyzeSubmit()">Продолжить</button>
+    <div style="text-align:center;margin-top:12px">
+      <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="renderQuickStartGenerate()">
+        Пропустить — начать с темы
+      </button>
+    </div>
+  </div>`;
+  setTimeout(()=>{const el=$("qs_channel_link");if(el) el.focus();},100);
+}
+
+function qsAnalyzeSubmit(){
+  const raw=($("qs_channel_link").value||"").trim();
+  if(!raw) return toast("Укажите @username канала","err");
+  const handle=raw.replace(/^https?:\/\/t\.me\//,"@").replace(/^t\.me\//,"@").replace(/^@+/,"@");
+  renderQuickStartGenerate(handle);
+}
+
+function renderQuickStartGenerate(prefillTopic){
+  // Экран с textarea — существующий quick start flow без изменений логики генерации.
+  $("app").innerHTML=`<div class="wrap" style="max-width:560px">
+    <button class="back-link" style="margin-top:12px" onclick="renderQuickStart()">← Назад</button>
+    <div class="page-head" style="text-align:center;margin-top:8px">
+      <h1 style="font-family:'Instrument Serif',serif;font-size:30px;font-weight:400">О чём сделать первый пост?</h1>
+      <p style="color:var(--text-dim)">Канал можно подключить позже — сначала покажем пример поста.</p>
+      <p style="color:var(--text-faint);font-size:13px;margin-top:6px">Сейчас покажем пример поста. Потом можно будет менять стиль, длину, расписание и подключить канал.</p>
+    </div>
+    <div class="card">
+      <textarea id="qs_about" rows="3" placeholder="Например: M&A сделки в России, Roblox, салон красоты, криптоновости" style="font-size:15px"></textarea>
+    </div>
+    <button class="btn" style="width:100%;justify-content:center;margin-top:16px;padding:14px"
+      onclick="qsGenerate()" id="qs_btn">Сгенерировать пост</button>
+  </div>`;
+  if(prefillTopic){const el=$("qs_about");if(el) el.value=prefillTopic;}
+  setTimeout(()=>{const el=$("qs_about");if(el) el.focus();},100);
+}
+
+function qsSkip(){
+  // Флаг "пропустил онбординг" — теперь сохраняется в localStorage,
+  // чтобы переживать перезагрузку. Без этого renderDashboard() при
+  // chans.length===0 снова показывал quick start.
+  trackGoal("quick_start_skipped");
+  logProductEvent("onboarding_choice_selected", "skip");
+  App._onboardingSkipped = true;
+  localStorage.setItem("ap_onboarding_skipped", "1");
+  go("dashboard");
+}

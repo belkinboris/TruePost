@@ -1,0 +1,245 @@
+const API_BASE=(typeof window!=="undefined"&&window.API_BASE)||"";
+window.onerror = function(msg, src, line, col, err) {
+  document.body.innerHTML = '<div style="padding:20px;font-family:monospace;color:red">'
+    + '<b>JS Error:</b><br>' + msg + '<br>Line: ' + line + '</div>';
+  return false;
+};
+window.addEventListener('unhandledrejection', function(e) {
+  document.body.innerHTML = '<div style="padding:20px;font-family:monospace;color:red">'
+    + '<b>Promise Error:</b><br>' + (e.reason?.message || e.reason) + '</div>';
+});
+
+// Автопост SPA — полная версия
+const App = {
+  token: localStorage.getItem("ap_token"),
+  user: null, cfg: null, view: "dashboard",
+  channelId: null, tab: "queue", _chan: null,
+  _onboardPosts: null, _consultHistory: [],
+  // Флаг "пользователь осознанно пропустил онбординг" -- переживает перезагрузку.
+  // Без этого renderDashboard() при chans.length===0 каждый раз возвращает на quick start.
+  _onboardingSkipped: !!localStorage.getItem("ap_onboarding_skipped"),
+};
+const $ = id => document.getElementById(id);
+const esc = s => (s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":'&#39;'}[c]));
+const fmt = n => (n||0).toLocaleString("ru-RU");
+
+function trackGoal(goal, params={}){
+  try{
+    if(window.ym && window.YM_COUNTER_ID){
+      window.ym(window.YM_COUNTER_ID,"reachGoal",goal,params);
+    }
+  }catch(_){}
+}
+
+// ── CTA/Journey Diagnostics: захват lp_session + UTM из URL лендинга (Part 4) ──
+const _sentLandingEvents = new Set(); // дедуп в рамках одной загрузки страницы
+
+function captureLandingSession(){
+  try{
+    // 1. Telegram Mini App: ?startapp=lp_<id> приходит как start_param, не как обычный query-параметр
+    const tg=window.Telegram?.WebApp;
+    const startParam=tg?.initDataUnsafe?.start_param || new URLSearchParams(window.location.search).get("tgWebAppStartParam");
+    if(startParam && startParam.startsWith("lp_")){
+      const sessionId=startParam.slice(3);
+      localStorage.setItem("ap_lp_session",sessionId);
+      // Это открытие Mini App из лендинга, а не серверный /start у бота —
+      // событие отражает именно это (см. diagnostic_notes на backend).
+      logLandingEventWeb("bot_start_from_landing");
+      logLandingEventWeb("web_register_opened");
+      return;
+    }
+
+    // 2. Обычный веб-переход: /?lp_session=<id>&utm_...
+    const params=new URLSearchParams(window.location.search);
+    const lpSession=params.get("lp_session");
+    if(lpSession){
+      localStorage.setItem("ap_lp_session",lpSession);
+      const utm={
+        utm_source:params.get("utm_source")||"",
+        utm_medium:params.get("utm_medium")||"",
+        utm_campaign:params.get("utm_campaign")||"",
+        utm_content:params.get("utm_content")||"",
+      };
+      if(utm.utm_source||utm.utm_medium||utm.utm_campaign||utm.utm_content){
+        localStorage.setItem("ap_lp_utm",JSON.stringify(utm));
+      }
+      logLandingEventWeb("web_register_opened");
+    }
+  }catch(_){}
+}
+
+function logLandingEventWeb(eventName){
+  try{
+    const sessionId=localStorage.getItem("ap_lp_session");
+    if(!sessionId) return; // не из лендинга — не логируем, не нужный шум
+
+    // Дедуп: одно и то же (session_id, event) не отправляем повторно за время
+    // жизни вкладки. Для событий которые логически должны случиться один раз
+    // за сессию лендинга (web_register_opened, register_success) дедуп
+    // дополнительно переживает full page reload через localStorage —
+    // иначе повторный boot() после регистрации или ре-рендер страницы
+    // отправляет событие ещё раз.
+    const dedupKey=sessionId+":"+eventName;
+    if(_sentLandingEvents.has(dedupKey)) return;
+    const PERSISTENT_DEDUP_EVENTS=["web_register_opened","register_success","bot_start_from_landing"];
+    if(PERSISTENT_DEDUP_EVENTS.includes(eventName)){
+      const sentKey="ap_lp_sent_"+eventName+"_"+sessionId;
+      if(localStorage.getItem(sentKey)) return;
+      localStorage.setItem(sentKey,"1");
+    }
+    _sentLandingEvents.add(dedupKey);
+
+    const utm=JSON.parse(localStorage.getItem("ap_lp_utm")||"{}");
+    fetch(API_BASE+"/api/landing-event",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        session_id:sessionId,
+        event:eventName,
+        url:window.location.href,
+        utm_source:utm.utm_source||"",
+        utm_medium:utm.utm_medium||"",
+        utm_campaign:utm.utm_campaign||"",
+        utm_content:utm.utm_content||"",
+        user_agent:navigator.userAgent||"",
+      }),
+      keepalive:true,
+    }).catch(()=>{});
+  }catch(_){}
+}
+
+function logProductEvent(eventName, packageId){
+  // Минимальная диагностика payment path (не для рекламной атрибуции —
+  // для этого LandingEvent/Метрика). Требует токена, потому что эти события
+  // происходят только после регистрации. Fire-and-forget — не блокирует
+  // действие пользователя, не показывает ошибку при сбое.
+  try{
+    if(!App.token) return;
+    fetch(API_BASE+"/api/product-event",{
+      method:"POST",
+      headers:{"Content-Type":"application/json","Authorization":"Bearer "+App.token},
+      body:JSON.stringify({event:eventName, package_id:packageId||""}),
+      keepalive:true,
+    }).catch(()=>{});
+  }catch(_){}
+}
+
+function cleanPostText(text){
+  if(!text) return "";
+  let t=text.trim();
+  // Режем thinking-блок до разделителя ---
+  const dashIdx=t.indexOf("\n---");
+  if(dashIdx>=0 && dashIdx<300){
+    t=t.slice(dashIdx+4).replace(/^-+/,"").trim();
+  }
+  // Убираем первый абзац если это рассуждение ИИ
+  const thinkRe=/^(Беру|Взял|Нашёл|Нашел|Выбрал|Использую|Из поиска|По результатам|Проверил|Вижу|Смотрю|Ищу|Изучил|Анализирую)\b/i;
+  const paras=t.split(/\n\s*\n/);
+  if(paras.length>1 && thinkRe.test(paras[0].trim())){
+    t=paras.slice(1).join("\n\n").trim();
+  }
+  return t;
+}
+
+function renderTg(text) {
+  if (!text) return "";
+  return esc(cleanPostText(text))
+    .replace(/&lt;b&gt;(.*?)&lt;\/b&gt;/gs,"<b>$1</b>")
+    .replace(/&lt;i&gt;(.*?)&lt;\/i&gt;/gs,"<i>$1</i>")
+    .replace(/\n/g,"<br>");
+}
+
+function toast(msg, kind="") {
+  // Последний рубеж защиты (P0 fix): что бы ни передали в toast — никогда
+  // не показываем [object Object] или другой нечитаемый JS-объект.
+  if (typeof msg !== "string") {
+    if (msg && typeof msg.message === "string") msg = msg.message;
+    else msg = "Не удалось выполнить действие. Попробуйте ещё раз.";
+  }
+  document.querySelectorAll(".toast").forEach(t=>t.remove());
+  const t=document.createElement("div");
+  t.className="toast "+kind; t.textContent=msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(),3200);
+}
+
+async function api(method, path, body) {
+  const opts={method,headers:{}};
+  const hadToken = !!App.token;
+  if (App.token) opts.headers["Authorization"]="Bearer "+App.token;
+  if (body!==undefined){opts.headers["Content-Type"]="application/json";opts.body=JSON.stringify(body);}
+  const res=await fetch(API_BASE+"/api"+path,opts);
+
+  let data=null;
+  try{data=await res.json();}catch(_){}
+
+  if (res.status===401){
+    // Debugging requirements (P0 task): логируем контекст 401 явно, чтобы
+    // на реальных логах/консоли можно было увидеть что произошло, вместо
+    // догадок. path/hadToken/server detail — минимум для диагностики.
+    console.log(`[auth] 401 from ${method} ${path}, hadToken=${hadToken}, server_detail=${JSON.stringify(data&&data.detail)}`);
+
+    // КРИТИЧНО (P0 fix): register/login НЕ отправляют токен и не должны
+    // попадать под "сессия истекла" вообще — это другая категория ошибки
+    // (например бэкенд недоступен, неверный путь, или временный сбой).
+    // Раньше любой 401 от ЛЮБОГО запроса (включая саму регистрацию) сразу
+    // звал logout() и показывал жёстко закодированный текст "Сессия истекла"
+    // ДО того как тело ответа даже читалось — это не давало пользователю
+    // увидеть реальную причину и блокировало первую попытку регистрации.
+    if (path === "/register" || path === "/login") {
+      throw new Error((data && data.detail) || "Не удалось войти. Попробуйте ещё раз.");
+    }
+
+    // Для остальных запросов 401 значит реально невалидный/истёкший токен —
+    // здесь оправдан logout() и чистый переход на экран входа, а не dead-end.
+    if (hadToken) {
+      logout();
+      throw new Error("Сессия истекла, войдите снова.");
+    }
+
+    // 401 без токена на защищённом эндпоинте — не должно происходить в
+    // обычном UI-потоке (кнопки защищённых действий не доступны без логина),
+    // но если как-то случилось — не зовём logout() на пустом месте.
+    throw new Error((data && data.detail) || "Нужно войти в аккаунт.");
+  }
+
+  if(!res.ok){
+    // КРИТИЧНО (P0 fix): data.detail от FastAPI не всегда строка. При 422
+    // (ошибка валидации Pydantic) это список объектов вида
+    // [{"loc":[...],"msg":"...","type":"..."}] — если такой объект попадает
+    // в new Error() напрямую, его message превращается в нечитаемое
+    // "[object Object]" в toast. Нормализуем здесь централизованно.
+    let detail = data && data.detail;
+    let msg = "Ошибка запроса";
+    if (typeof detail === "string") {
+      msg = detail;
+    } else if (Array.isArray(detail) && detail.length) {
+      // Pydantic validation error array — берём первое читаемое сообщение.
+      msg = detail.map(d => (d && typeof d.msg === "string") ? d.msg : null).filter(Boolean).join("; ") || "Проверьте введённые данные.";
+    } else if (detail && typeof detail === "object") {
+      msg = detail.message || detail.msg || "Ошибка запроса";
+    }
+    throw new Error(msg);
+  }
+  return data;
+}
+
+function logout(){
+  App.token=null;App.user=null;
+  localStorage.removeItem("ap_token");
+  renderAuth();
+}
+
+// Task B rules 2-3: защищённые действия должны проверять auth до запроса
+// и показывать понятное сообщение, а не давать сырому 401 всплыть из api().
+// Используется как первая строка в обработчиках кнопок "Все каналы",
+// "Сгенерировать пост", "Подключить канал", "Опубликовать сейчас",
+// "Открыть настройки" и т.п.
+function requireAuth(){
+  if(App.token) return true;
+  toast("Сначала войдите или зарегистрируйтесь, чтобы продолжить.","err");
+  renderAuth();
+  return false;
+}
+
+async function refreshUser(){try{App.user=await api("GET","/me");}catch(_){}}

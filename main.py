@@ -98,6 +98,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Автопост", lifespan=lifespan)
 
+# CORS: фронтенд раздаётся с российского хостинга (app.projectsozdatel.ru),
+# API остаётся здесь (Railway за Cloudflare). Браузеру нужно явное разрешение
+# на кросс-доменные запросы с Authorization-заголовком.
+from fastapi.middleware.cors import CORSMiddleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://app.projectsozdatel.ru",
+        "https://autopost.projectsozdatel.ru",  # same-origin вариант остаётся рабочим
+    ],
+    allow_methods=["*"],
+    allow_headers=["Authorization", "Content-Type"],
+    max_age=86400,
+)
+
 from internal_metrics import router as internal_metrics_router
 app.include_router(internal_metrics_router)
 
@@ -111,6 +126,8 @@ from internal_payment_path import router as payment_path_router
 app.include_router(payment_path_router)
 
 from internal_user_journeys import router as user_journeys_router
+from internal_llm_compare import router as llm_compare_router
+app.include_router(llm_compare_router)
 app.include_router(user_journeys_router)
 
 # ── Авторизация ───────────────────────────────────────────────

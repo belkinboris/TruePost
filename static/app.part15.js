@@ -1,0 +1,147 @@
+
+async function deletePost(id){
+  try{await api("DELETE","/posts/"+id);renderQueue();}
+  catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+}
+async function regenPost(id){
+  const btn=$("regen_"+id);if(btn){btn.innerHTML='<span class="spinner"></span>';btn.disabled=true;}
+  try{
+    await api("POST","/posts/"+id+"/reject");
+    const r=await api("POST","/channels/"+App._chan.id+"/generate");
+    toast("Готово ✓","ok");renderQueue();
+  }catch(e){toast(e&&e.message?e.message:"Ошибка","err");if(btn){btn.innerHTML="↻ Заново";btn.disabled=false;}}
+}
+
+async function openTgConnect(){
+  // Гарантируем что user загружен
+  if(!App.user || !App.user.id){
+    try{ App.user = await api("GET","/me"); }catch(e){}
+  }
+  const uid = App.user?.id;
+  if(!uid){
+    // Нет токена — пользователь не авторизован (например Mini App без localStorage)
+    const twa = window.Telegram?.WebApp;
+    if(twa && typeof twa.showAlert==='function'){
+      twa.showAlert("Войдите в аккаунт на сайте autopost.projectsozdatel.ru, а затем откройте уведомления снова.");
+    } else {
+      toast("Не удалось определить аккаунт. Попробуйте войти заново.","err");
+    }
+    return;
+  }
+  const bot = App.cfg?.bot_username || "trpst_bot";
+  const url = "https://t.me/" + bot + "?start=u" + uid;
+  const twa = window.Telegram?.WebApp;
+  if(twa?.openLink){
+    twa.openLink(url);
+  } else if(twa?.openTelegramLink){
+    twa.openTelegramLink(url);
+  } else {
+    window.open(url,"_blank");
+  }
+}
+
+function pickChannelType(type){
+  App._chan.channel_type=type;
+  const ta=$("adv_type_thematic"),tn=$("adv_type_news"),tl=$("adv_sched_title");
+  if(ta) ta.style.border=type==="thematic"?"2px solid var(--accent)":"2px solid var(--border-soft)";
+  if(ta) ta.style.background=type==="thematic"?"var(--accent-soft)":"";
+  if(tn) tn.style.border=type==="news"?"2px solid var(--accent)":"2px solid var(--border-soft)";
+  if(tn) tn.style.background=type==="news"?"var(--accent-soft)":"";
+  if(tl) tl.textContent=type==="news"?"Проверять новости каждые":"Расписание";
+}
+
+function initCookieBanner(){
+  if(localStorage.getItem("cookie_ok")) return;
+  const b=document.createElement("div");
+  b.style.cssText="position:fixed;bottom:0;left:0;right:0;background:#1a1815;color:#e9e6df;font-size:13px;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;z-index:9999;";
+  b.innerHTML=`<span>Мы используем cookies. <a href="/legal/privacy" target="_blank" style="color:#d8b15e">Подробнее</a></span>
+    <button onclick="this.parentElement.remove();localStorage.setItem('cookie_ok','1')"
+      style="background:#d8b15e;color:#1a1404;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:500">Понятно</button>`;
+  document.body.appendChild(b);
+}
+function initKeyboardDismiss(){
+  document.addEventListener("touchstart",function(e){
+    const a=document.activeElement;
+    if(a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"))
+      if(!e.target.closest("input,textarea,button,select,a")) a.blur();
+  },{passive:true});
+}
+
+// BOOT
+// ── Telegram SDK: асинхронная, не блокирующая загрузка (P0 fix) ──────
+// Раньше SDK подключался блокирующим <script> тегом в index.html ДО
+// app.js — при медленном/недоступном telegram.org это держало весь boot
+// до 15-20 секунд. Теперь SDK грузится программно, параллельно с
+// остальной загрузкой приложения, с явным таймаутом, и НИКОГДА не
+// блокирует boot()/auth/quick start/channel list (task items 1-3, 6, 8).
+const TELEGRAM_SDK_TIMEOUT_MS = 1800;
+let _telegramSdkPromise = null;
+
+function loadTelegramSdkAsync(){
+  if(_telegramSdkPromise) return _telegramSdkPromise;
+  try{ performance.mark('telegram_sdk_started'); }catch(_){}
+  console.log('[timing] telegram_sdk_started');
+
+  _telegramSdkPromise = new Promise((resolve)=>{
+    // Уже загружен (например повторный вызов после первого успеха).
+    if(window.Telegram?.WebApp){
+      resolve(true);
+      return;
+    }
+    let settled=false;
+    const finish=(ok)=>{
+      if(settled) return;
+      settled=true;
+      resolve(ok);
+    };
+
+    const timer=setTimeout(()=>{
+      try{ performance.mark('telegram_sdk_failed_or_timeout'); }catch(_){}
+      console.log(`[timing] telegram_sdk_failed_or_timeout (>${TELEGRAM_SDK_TIMEOUT_MS}ms)`);
+      finish(false);
+    }, TELEGRAM_SDK_TIMEOUT_MS);
+
+    const script=document.createElement('script');
+    script.src='https://telegram.org/js/telegram-web-app.js';
+    script.async=true;
+    script.onload=()=>{
+      clearTimeout(timer);
+      try{ performance.mark('telegram_sdk_loaded'); }catch(_){}
+      console.log('[timing] telegram_sdk_loaded');
+      finish(true);
+    };
+    script.onerror=()=>{
+      clearTimeout(timer);
+      try{ performance.mark('telegram_sdk_failed_or_timeout'); }catch(_){}
+      console.log('[timing] telegram_sdk_failed_or_timeout (onerror)');
+      finish(false);
+    };
+    document.head.appendChild(script);
+  });
+
+  return _telegramSdkPromise;
+}
+
+function initTelegram(){
+  // Guarded (task item 4-5): если SDK недоступен — тихо работаем как
+  // обычное браузерное приложение, никогда не падаем и не блокируем boot.
+  const tg=window.Telegram?.WebApp;
+  if(!tg) return;
+  try{
+    if(typeof tg.ready==='function') tg.ready();
+    if(typeof tg.expand==='function') tg.expand();           // на весь экран
+    if(typeof tg.setHeaderColor==='function') tg.setHeaderColor("#f5f1ea");
+    if(typeof tg.setBackgroundColor==='function') tg.setBackgroundColor("#f5f1ea");
+    if(typeof tg.disableVerticalSwipes==='function') tg.disableVerticalSwipes(); // не закрывать свайпом случайно
+  }catch(_){}
+}
+
+// Запускаем загрузку SDK не дожидаясь её — если успеет загрузиться,
+// initTelegram() вызовется повторно и безопасно доинициализирует
+// Telegram-специфичные фичи. Если не успеет/упадёт — приложение уже
+// полностью работает в обычном web-режиме, ничего не теряет.
+function initTelegramAsync(){
+  loadTelegramSdkAsync().then((ok)=>{
+    if(ok) initTelegram();
+  });
+}
