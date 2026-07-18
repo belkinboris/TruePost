@@ -268,7 +268,9 @@ async def _call_yandex(system, messages, max_tokens=700):
             "completionOptions": {"stream": False, "temperature": config.LLM_TEMPERATURE, "maxTokens": str(max_tokens)},
             "messages": ya_messages,
         }
-    headers = {"Authorization": f"Api-Key {config.YANDEX_API_KEY}", "Content-Type": "application/json"}
+    # OpenAI-совместимый эндпоинт ждёт стандартный Bearer; нативный — Api-Key.
+    auth = f"Bearer {config.YANDEX_API_KEY}" if config.YANDEX_API_MODE == "openai" else f"Api-Key {config.YANDEX_API_KEY}"
+    headers = {"Authorization": auth, "Content-Type": "application/json"}
 
     last_error = None
     for attempt in range(3):
