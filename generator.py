@@ -264,6 +264,12 @@ async def _call_yandex(system, messages, max_tokens=700):
             "instructions": system,
             "input": user_text,
             "max_output_tokens": max(max_tokens, 96),
+            # DeepSeek V4 включает "режим размышлений" по умолчанию: без явного
+            # отключения токены уходят на невидимый reasoning_content, а на
+            # финальный ответ бюджета может не остаться вовсе (incomplete_details:
+            # max_output_tokens при пустом output). Пишем посты, не решаем задачи --
+            # рассуждения не нужны, отключаем, чтобы весь лимит шёл на текст.
+            "thinking": {"type": "disabled"},
         }
     else:
         url = YANDEX_LLM_URL
