@@ -263,7 +263,11 @@ async def _call_yandex(system, messages, max_tokens=700):
             "temperature": config.LLM_TEMPERATURE,
             "instructions": system,
             "input": user_text,
-            "max_output_tokens": max(max_tokens, 96),
+            # DeepSeek тратит невидимые reasoning-токены ДО ответа, а параметр
+            # их отключения Яндекс не пробрасывает (проверено: 200 OK, но
+            # incomplete/max_output_tokens). Поэтому бюджет с запасом:
+            # рассуждения + сам ответ. Reasoning-токены на Flash дешёвые.
+            "max_output_tokens": max_tokens + 8000,
             # DeepSeek V4 включает "режим размышлений" по умолчанию: без явного
             # отключения токены уходят на невидимый reasoning_content, а на
             # финальный ответ бюджета может не остаться вовсе (incomplete_details:
@@ -304,6 +308,8 @@ async def _call_yandex(system, messages, max_tokens=700):
                         # у каждого content -- список частей {type, text}.
                         parts = []
                         for item in (data.get("output") or []):
+                            if item.get("type") == "reasoning":
+                                continue  # внутренние размышления -- не для поста
                             for c in (item.get("content") or []):
                                 if c.get("text"):
                                     parts.append(c["text"])
@@ -312,6 +318,9 @@ async def _call_yandex(system, messages, max_tokens=700):
                     tokens = int(usage.get("total_tokens") or usage.get("output_tokens", 0) or 0)
                     if not text:
                         raise KeyError("empty output_text")
+                    inc = (data.get("incomplete_details") or {}).get("reason")
+                    if inc:
+                        logger.warning(f"Yandex LLM: ответ неполный (reason={inc}), длина текста {len(text)}")
                 else:
                     text = data["result"]["alternatives"][0]["message"]["text"]
                     tokens = int(data.get("result", {}).get("usage", {}).get("totalTokens", 0) or 0)
