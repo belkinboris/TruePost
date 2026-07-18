@@ -30,6 +30,18 @@ LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
 YANDEX_MODEL_URI = os.getenv("YANDEX_MODEL_URI") or (
     f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest" if YANDEX_FOLDER_ID else ""
 )
+
+# === Яндекс.Поиск (фаза 1.5) — замена web_search для новостных каналов ===
+# Отдельный сервис Yandex Cloud (Search API v2, синхронный режим). Ключ по
+# умолчанию тот же Api-Key, что и для Foundation Models, но сервисному
+# аккаунту нужна ДОПОЛНИТЕЛЬНАЯ роль search-api.webSearch.user на каталог.
+# Тарифицируется за запрос; для внутреннего учёта конвертируем в токены.
+YANDEX_SEARCH_ENABLED = os.getenv("YANDEX_SEARCH_ENABLED", "true").lower() in {"1", "true", "yes", "on"}
+YANDEX_SEARCH_API_KEY = os.getenv("YANDEX_SEARCH_API_KEY") or YANDEX_API_KEY
+YANDEX_SEARCH_MAX_RESULTS = int(os.getenv("YANDEX_SEARCH_MAX_RESULTS", "8"))
+# Условная стоимость одного поискового запроса во внутренних токенах
+# (для списания с баланса пользователя, по аналогии с web_search у Claude).
+YANDEX_SEARCH_TOKEN_COST = int(os.getenv("YANDEX_SEARCH_TOKEN_COST", "3000"))
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
 # @maintrpost_bot -- вход в Mini App (Main Mini App режим включён в BotFather).

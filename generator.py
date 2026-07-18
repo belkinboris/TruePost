@@ -7,6 +7,7 @@ import logging
 import httpx
 
 import config
+import yandex_search
 from database import Channel
 
 logger = logging.getLogger(__name__)
@@ -545,6 +546,33 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
     use_search = channel.use_web_search and not topic
     effective_topic = topic or channel.about  # тема, на которую пост ОБЯЗАН быть
 
+    # === Фаза 1.5: Яндекс.Поиск вместо web_search у провайдера yandex ===
+    # У Yandex Foundation Models нет встроенного поиска. Если пост требует
+    # актуальных фактов (use_web_search или явный topic без материалов) --
+    # сами ходим в Yandex Search API и подкладываем выдачу как источники.
+    # При сбое поиска тихо деградируем в прежнее поведение (без поиска).
+    search_tokens = 0
+    provider = FORCE_PROVIDER or config.LLM_PROVIDER
+    if (
+        provider == "yandex"
+        and not source_material
+        and (use_search or (topic and channel.use_web_search))
+    ):
+        try:
+            found = await yandex_search.search_news(effective_topic)
+            if found:
+                source_material = (
+                    "СВЕЖАЯ ВЫДАЧА ПОИСКА (Яндекс) по теме -- используй только эти факты, не выдумывай:\n\n"
+                    + yandex_search.format_search_context(found)
+                )
+                search_tokens = config.YANDEX_SEARCH_TOKEN_COST
+                logger.info(f"Канал {channel.id}: yandex_search дал {len(found)} результатов для «{effective_topic[:60]}»")
+            else:
+                logger.info(f"Канал {channel.id}: yandex_search пусто для «{effective_topic[:60]}», генерация без поиска")
+        except yandex_search.SearchUnavailable as e:
+            logger.warning(f"Канал {channel.id}: yandex_search недоступен ({e}), генерация без поиска")
+        use_search = False  # у _call_yandex поиска всё равно нет
+
     if topic:
         user_msg = f"Напиши пост на тему: «{topic}»."
         if source_material:
@@ -564,7 +592,7 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
 
     text, tokens = await _call_llm(system, user_msg, use_search, max_tokens=650)
     cleaned = _clean_post(text)
-    total_tokens = tokens
+    total_tokens = tokens + search_tokens
     fallback_used = "none"
 
     if _looks_like_refusal(cleaned) and use_search:
@@ -620,10 +648,20 @@ async def check_news_available(channel: "Channel") -> tuple:
     """Проверяет есть ли свежие новости по теме. Возвращает (bool, tokens_used)."""
     provider = FORCE_PROVIDER or config.LLM_PROVIDER
     if provider == "yandex":
-        # У Yandex API нет web_search: проверить свежесть новостей нечем.
-        # Не блокируем цикл генерации (фаза 1.5 — Яндекс.Поиск API).
-        logger.warning("check_news_available: провайдер yandex без web_search — пропускаем проверку")
-        return True, 0
+        # Фаза 1.5: свежесть проверяем прямым запросом в Яндекс.Поиск.
+        # Fail-open: любая техническая проблема поиска НЕ блокирует цикл
+        # генерации (пользователь важнее идеальной проверки).
+        try:
+            found = await yandex_search.search_news(channel.about)
+        except yandex_search.SearchUnavailable as e:
+            logger.warning(f"check_news_available: yandex_search недоступен ({e}) — считаем что новости есть")
+            return True, 0
+        has_news = yandex_search.has_fresh_results(found)
+        logger.info(
+            f"check_news_available (yandex): {len(found)} результатов, fresh={'yes' if has_news else 'no'} "
+            f"для «{(channel.about or '')[:60]}»"
+        )
+        return has_news, config.YANDEX_SEARCH_TOKEN_COST
     system = "You are a news editor. Reply only YES or NO."
     user = (
         f"Topic: {channel.about}\n\n"
