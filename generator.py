@@ -230,9 +230,12 @@ def rejection_message(classification: str) -> str | None:
     return _REJECTION_MESSAGES.get(classification)
 
 YANDEX_LLM_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
-# OpenAI-совместимый эндпоинт AI Studio — для открытых моделей
-# (DeepSeek, Qwen, gpt-oss). Модель задаётся через YANDEX_MODEL_URI.
-YANDEX_OPENAI_URL = "https://llm.api.cloud.yandex.net/v1/chat/completions"
+# Responses API AI Studio — для открытых моделей (DeepSeek, Qwen, gpt-oss).
+# ВАЖНО: это НЕ Chat Completions (llm.api.cloud.yandex.net/v1/chat/completions --
+# та ошибочная версия давала "Failed to parse model URI"), а официальный
+# Responses-эндпоинт с другим хостом и форматом тела (см. AI Studio ->
+# DeepSeek 4 Flash -> "Посмотреть код" -> Python).
+YANDEX_RESPONSES_URL = "https://ai.api.cloud.yandex.net/v1/responses"
 
 # Принудительный провайдер для internal-сравнения качества (см.
 # internal_llm_compare.py). None = использовать config.LLM_PROVIDER.
@@ -250,13 +253,17 @@ async def _call_yandex(system, messages, max_tokens=700):
     if not config.YANDEX_API_KEY or not config.YANDEX_MODEL_URI:
         raise GenerationError("Yandex LLM не настроен (YANDEX_API_KEY / YANDEX_FOLDER_ID).")
     if config.YANDEX_API_MODE == "openai":
-        # Открытые модели (DeepSeek/Qwen/gpt-oss): OpenAI-совместимый формат.
-        url = YANDEX_OPENAI_URL
+        # Открытые модели (DeepSeek/Qwen/gpt-oss) идут через Responses API.
+        # messages здесь всегда одно user-сообщение (см. _call_llm) --
+        # Responses API у AI Studio принимает input строкой, а не историю.
+        url = YANDEX_RESPONSES_URL
+        user_text = "\n\n".join(m["content"] for m in messages if m.get("content"))
         body = {
             "model": config.YANDEX_MODEL_URI,
-            "max_tokens": max_tokens,
             "temperature": config.LLM_TEMPERATURE,
-            "messages": [{"role": "system", "content": system}] + messages,
+            "instructions": system,
+            "input": user_text,
+            "max_output_tokens": max_tokens,
         }
     else:
         url = YANDEX_LLM_URL
@@ -268,9 +275,7 @@ async def _call_yandex(system, messages, max_tokens=700):
             "completionOptions": {"stream": False, "temperature": config.LLM_TEMPERATURE, "maxTokens": str(max_tokens)},
             "messages": ya_messages,
         }
-    # OpenAI-совместимый эндпоинт ждёт стандартный Bearer; нативный — Api-Key.
-    auth = f"Bearer {config.YANDEX_API_KEY}" if config.YANDEX_API_MODE == "openai" else f"Api-Key {config.YANDEX_API_KEY}"
-    headers = {"Authorization": auth, "Content-Type": "application/json"}
+    headers = {"Authorization": f"Api-Key {config.YANDEX_API_KEY}", "Content-Type": "application/json"}
 
     last_error = None
     for attempt in range(3):
@@ -286,13 +291,26 @@ async def _call_yandex(system, messages, max_tokens=700):
             data = r.json()
             try:
                 if config.YANDEX_API_MODE == "openai":
-                    text = data["choices"][0]["message"]["content"]
-                    tokens = int((data.get("usage") or {}).get("total_tokens", 0) or 0)
+                    if "output_text" in data and data["output_text"]:
+                        text = data["output_text"]
+                    else:
+                        # Формат OpenAI Responses: output -- список объектов,
+                        # у каждого content -- список частей {type, text}.
+                        parts = []
+                        for item in data.get("output", []):
+                            for c in item.get("content", []):
+                                if c.get("text"):
+                                    parts.append(c["text"])
+                        text = "\n".join(parts)
+                    usage = data.get("usage") or {}
+                    tokens = int(usage.get("total_tokens") or usage.get("output_tokens", 0) or 0)
+                    if not text:
+                        raise KeyError("empty output_text")
                 else:
                     text = data["result"]["alternatives"][0]["message"]["text"]
                     tokens = int(data.get("result", {}).get("usage", {}).get("totalTokens", 0) or 0)
             except (KeyError, IndexError):
-                logger.error(f"Yandex LLM unexpected response: {str(data)[:500]}")
+                logger.error(f"Yandex LLM unexpected response: {str(data)[:800]}")
                 raise GenerationError("Неожиданный ответ ИИ. Попробуйте ещё раз.")
             return text, tokens
 
