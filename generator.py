@@ -230,6 +230,9 @@ def rejection_message(classification: str) -> str | None:
     return _REJECTION_MESSAGES.get(classification)
 
 YANDEX_LLM_URL = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+# OpenAI-совместимый эндпоинт AI Studio — для открытых моделей
+# (DeepSeek, Qwen, gpt-oss). Модель задаётся через YANDEX_MODEL_URI.
+YANDEX_OPENAI_URL = "https://llm.api.cloud.yandex.net/v1/chat/completions"
 
 # Принудительный провайдер для internal-сравнения качества (см.
 # internal_llm_compare.py). None = использовать config.LLM_PROVIDER.
@@ -246,21 +249,32 @@ async def _call_yandex(system, messages, max_tokens=700):
     """
     if not config.YANDEX_API_KEY or not config.YANDEX_MODEL_URI:
         raise GenerationError("Yandex LLM не настроен (YANDEX_API_KEY / YANDEX_FOLDER_ID).")
-    ya_messages = [{"role": "system", "text": system}] + [
-        {"role": m["role"], "text": m["content"]} for m in messages
-    ]
-    body = {
-        "modelUri": config.YANDEX_MODEL_URI,
-        "completionOptions": {"stream": False, "temperature": 0.6, "maxTokens": str(max_tokens)},
-        "messages": ya_messages,
-    }
+    if config.YANDEX_API_MODE == "openai":
+        # Открытые модели (DeepSeek/Qwen/gpt-oss): OpenAI-совместимый формат.
+        url = YANDEX_OPENAI_URL
+        body = {
+            "model": config.YANDEX_MODEL_URI,
+            "max_tokens": max_tokens,
+            "temperature": config.LLM_TEMPERATURE,
+            "messages": [{"role": "system", "content": system}] + messages,
+        }
+    else:
+        url = YANDEX_LLM_URL
+        ya_messages = [{"role": "system", "text": system}] + [
+            {"role": m["role"], "text": m["content"]} for m in messages
+        ]
+        body = {
+            "modelUri": config.YANDEX_MODEL_URI,
+            "completionOptions": {"stream": False, "temperature": config.LLM_TEMPERATURE, "maxTokens": str(max_tokens)},
+            "messages": ya_messages,
+        }
     headers = {"Authorization": f"Api-Key {config.YANDEX_API_KEY}", "Content-Type": "application/json"}
 
     last_error = None
     for attempt in range(3):
         try:
             async with httpx.AsyncClient(timeout=120) as client:
-                r = await client.post(YANDEX_LLM_URL, headers=headers, json=body)
+                r = await client.post(url, headers=headers, json=body)
         except httpx.TimeoutException:
             last_error = "timeout"
             await asyncio.sleep(2 * (attempt + 1))
@@ -269,11 +283,15 @@ async def _call_yandex(system, messages, max_tokens=700):
         if r.status_code < 400:
             data = r.json()
             try:
-                text = data["result"]["alternatives"][0]["message"]["text"]
+                if config.YANDEX_API_MODE == "openai":
+                    text = data["choices"][0]["message"]["content"]
+                    tokens = int((data.get("usage") or {}).get("total_tokens", 0) or 0)
+                else:
+                    text = data["result"]["alternatives"][0]["message"]["text"]
+                    tokens = int(data.get("result", {}).get("usage", {}).get("totalTokens", 0) or 0)
             except (KeyError, IndexError):
                 logger.error(f"Yandex LLM unexpected response: {str(data)[:500]}")
                 raise GenerationError("Неожиданный ответ ИИ. Попробуйте ещё раз.")
-            tokens = int(data.get("result", {}).get("usage", {}).get("totalTokens", 0) or 0)
             return text, tokens
 
         logger.error(f"Yandex LLM {r.status_code}: {r.text[:500]}")
@@ -476,6 +494,9 @@ async def generate_post(channel: Channel, source_material: str = "", topic: str 
 Если все свежие события уже покрыты — возьми другой угол: последствия, реакция рынка, сравнение с похожим случаем. Никогда не пиши про то же событие теми же словами.
 
 ''' if recent_titles else ""}БАЗОВЫЕ ПРАВИЛА (нарушение недопустимо):
+- Markdown ЗАПРЕЩЁН ПОЛНОСТЬЮ: символы #, ##, ###, **, __, ``` не существуют. Telegram их не отображает — читатель увидит мусор. Форматирование ТОЛЬКО тегами <b>жирный</b> и <i>курсив</i>
+- ЗАПРЕЩЕНЫ шаблонные открытия: «Привет, друзья», «Привет всем», «Хочу поделиться», «Сегодня поговорим», «Давайте разберёмся», «Все мы знаем», «В современном мире» — и любые похожие. Первая строка = сразу факт, деталь, вопрос или заголовок, цепляющий читателя
+- ЗАПРЕЩЕНЫ пустые обобщения: «это очень важно», «становится всё более актуальным», «играет большую роль». Вместо оценки — конкретика: цифра, пример, ситуация
 - Длинное тире — ЗАПРЕЩЕНО. Используй только короткое тире -
 - ЗАПРЕЩЕНО любое вступление, объяснение или рассуждение перед постом
 - ЗАПРЕЩЕНЫ фразы-действия: «Беру сделку», «Взял новость», «Нашёл факт», «Из поиска», «Выбрал тему», «Использую», «Проверил» — и любые похожие
