@@ -263,7 +263,7 @@ async def _call_yandex(system, messages, max_tokens=700):
             "temperature": config.LLM_TEMPERATURE,
             "instructions": system,
             "input": user_text,
-            "max_output_tokens": max_tokens,
+            "max_output_tokens": max(max_tokens, 96),
         }
     else:
         url = YANDEX_LLM_URL
@@ -297,8 +297,8 @@ async def _call_yandex(system, messages, max_tokens=700):
                         # Формат OpenAI Responses: output -- список объектов,
                         # у каждого content -- список частей {type, text}.
                         parts = []
-                        for item in data.get("output", []):
-                            for c in item.get("content", []):
+                        for item in (data.get("output") or []):
+                            for c in (item.get("content") or []):
                                 if c.get("text"):
                                     parts.append(c["text"])
                         text = "\n".join(parts)
