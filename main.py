@@ -127,6 +127,8 @@ app.include_router(payment_path_router)
 
 from internal_user_journeys import router as user_journeys_router
 from internal_llm_compare import router as llm_compare_router
+from internal_telegram_ping import router as telegram_ping_router
+app.include_router(telegram_ping_router)
 app.include_router(llm_compare_router)
 app.include_router(user_journeys_router)
 
