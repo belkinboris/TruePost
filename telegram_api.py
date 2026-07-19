@@ -15,7 +15,14 @@ logger = logging.getLogger(__name__)
 # нестабильна (~32% отказов на попытку соединения, 2026-07-19); релей решает
 # это на уровне сети, а не количеством попыток. Формат ответа идентичен
 # прямому Bot API -- воркер прозрачно пробрасывает запрос/ответ.
-_API_BASE = (config.TELEGRAM_API_BASE or "https://api.telegram.org").rstrip("/")
+_api_base_raw = (config.TELEGRAM_API_BASE or "https://api.telegram.org").rstrip("/")
+# Подстраховка от опечатки в env-переменной (ровно это и произошло
+# 2026-07-19: значение без "https://" давало httpx.UnsupportedProtocol
+# мгновенно, без единой попытки сети -- значит, ошибку легко принять за
+# сетевую и потратить время не на ту причину).
+if not _api_base_raw.startswith(("http://", "https://")):
+    _api_base_raw = "https://" + _api_base_raw
+_API_BASE = _api_base_raw
 API = _API_BASE + "/bot{token}/{method}"
 
 
