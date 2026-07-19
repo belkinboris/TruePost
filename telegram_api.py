@@ -243,13 +243,32 @@ async def send_notification(tg_chat_id: int, text: str) -> tuple[bool, str]:
 
 
 async def verify_channel(chat: str) -> tuple[bool, str]:
-    """Проверяет что канал существует и бот является администратором."""
+    """
+    Проверяет что канал существует и бот является администратором.
+
+    Делает до 2 полных попыток при сетевых сбоях: связь Timeweb->Telegram
+    нестабильна (~30% таймаутов на попытку соединения по замерам 2026-07-19),
+    а verify_channel -- это 3 последовательных вызова API, так что при 30%
+    отказе на каждом шаге вероятность хотя бы одного сбоя за один проход
+    больше 60%. Одна лишняя попытка всей цепочки снижает эффективный отказ
+    до нескольких процентов -- дешевле и надёжнее, чем растить таймауты.
+    """
+    for attempt in range(2):
+        ok, message, is_network_issue = await _verify_channel_once(chat)
+        if ok or not is_network_issue:
+            return ok, message
+        if attempt == 0:
+            logger.info(f"verify_channel: сетевой сбой на попытке 1, повтор для «{chat}»")
+    return ok, message
+
+
+async def _verify_channel_once(chat: str) -> tuple[bool, str]:
     raw_chat = chat
     try:
         chat = normalize_chat(chat)
     except ChatNormalizationError as e:
         logger.info(f"channel_input_raw=«{raw_chat}» channel_username_normalized=FAILED verification_error_code=normalization_failed")
-        return False, str(e)
+        return False, str(e), False
     logger.info(f"channel_input_raw=«{raw_chat}» channel_username_normalized=«{chat}»")
 
     me = await _call("getMe", {})
@@ -257,36 +276,36 @@ async def verify_channel(chat: str) -> tuple[bool, str]:
         desc = me.get("description", "")
         logger.info(f"verification_error_code=getme_failed raw_telegram_error=«{desc}»")
         if "network_error" in desc:
-            return False, _normalize_telegram_error(desc, chat=chat)
-        return False, "Не удалось получить данные бота. Проверь TELEGRAM_BOT_TOKEN."
+            return False, _normalize_telegram_error(desc, chat=chat), True
+        return False, "Не удалось получить данные бота. Проверь TELEGRAM_BOT_TOKEN.", False
     bot_id = me["result"]["id"]
 
     chat_info = await _call("getChat", {"chat_id": chat})
     if not chat_info.get("ok"):
         desc = chat_info.get("description", "")
         logger.info(f"verification_error_code=chat_lookup_failed channel_username_normalized=«{chat}» raw_telegram_error=«{desc}»")
-        return False, _normalize_telegram_error(desc, chat=chat)
+        return False, _normalize_telegram_error(desc, chat=chat), "network_error" in desc
 
     admins = await _call("getChatAdministrators", {"chat_id": chat})
     bot_name = "@" + (config.TELEGRAM_BOT_USERNAME or "Trpst_bot")
     if not admins.get("ok"):
         desc = admins.get("description", "")
         logger.info(f"verification_error_code=admins_lookup_failed channel_username_normalized=«{chat}» raw_telegram_error=«{desc}»")
-        return False, _normalize_telegram_error(desc, chat=chat)
+        return False, _normalize_telegram_error(desc, chat=chat), "network_error" in desc
 
     bot_admin = next((a for a in admins["result"] if a["user"]["id"] == bot_id), None)
 
     if not bot_admin:
         logger.info(f"verification_error_code=wrong_bot channel_username_normalized=«{chat}»")
-        return False, f"Похоже, добавлен не тот бот. Для публикации нужен {bot_name}."
+        return False, f"Похоже, добавлен не тот бот. Для публикации нужен {bot_name}.", False
 
     if bot_admin.get("status") == "creator":
         logger.info(f"verification_error_code=none channel_username_normalized=«{chat}»")
-        return True, "Канал подключён — бот является создателем ✓"
+        return True, "Канал подключён — бот является создателем ✓", False
 
     if not bot_admin.get("can_post_messages", False):
         logger.info(f"verification_error_code=no_post_rights channel_username_normalized=«{chat}»")
-        return False, "Бот найден, но у него нет права публиковать сообщения. Дайте право «Публиковать сообщения»."
+        return False, "Бот найден, но у него нет права публиковать сообщения. Дайте право «Публиковать сообщения».", False
 
     logger.info(f"verification_error_code=none channel_username_normalized=«{chat}»")
-    return True, "Канал подключён — бот является администратором ✓"
+    return True, "Канал подключён — бот является администратором ✓", False
