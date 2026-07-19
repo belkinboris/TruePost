@@ -1,4 +1,52 @@
 
+async function publishPost(id){
+  if(!requireAuth()) return;
+  // P0 fix (third issue): если канал не подключён к Telegram, не пытаемся
+  // публиковать вообще — показываем понятное сообщение вместо того чтобы
+  // дать запросу дойти до Telegram API и упасть с технической ошибкой.
+  const chan = App._chan;
+  if (chan && (!chan.tg_chat || !chan.verified)) {
+    toast("Сначала подключите Telegram-канал, потом можно будет опубликовать пост.", "err");
+    return;
+  }
+
+  const ta=$("pt_"+id);
+  if(ta&&!ta.classList.contains("hidden")) try{await api("PATCH","/posts/"+id,{text:ta.value});}catch(_){}
+
+  const card=$("pc_"+id);
+  const btn=card?card.querySelector(`[onclick="publishPost(${id})"]`):null;
+  if(btn){btn.innerHTML='<span class="spinner"></span> Публикуем…';btn.disabled=true;}
+
+  const TIMEOUT_MS=18000;
+  let timedOut=false, error=null, result=null;
+  try {
+    ({timedOut, error, result} = await withTimeout(api("POST","/posts/"+id+"/publish"), TIMEOUT_MS, "timeout"));
+  } catch (e) {
+    // withTimeout перебрасывает НЕ-таймаут ошибки (например HTTPException
+    // 400 "Telegram сейчас отвечает медленно..." от бэкенда) -- раньше это
+    // никто не ловил и необработанный reject стирал всю страницу целиком.
+    error = e;
+  }
+
+  if(timedOut){
+    if(btn) btn.innerHTML='<span class="spinner"></span> Проверяем статус…';
+    const {confirmed}=await pollPostStatus(id);
+    if(confirmed){toast("Опубликовано ✓","ok");renderQueue();return;}
+    toast("Не удалось подтвердить публикацию. Проверьте канал или попробуйте ещё раз.","err");
+    if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
+    return;
+  }
+  if(error){
+    toast((error&&error.message)||"Не удалось опубликовать пост. Попробуйте ещё раз.","err");
+    if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
+    return;
+  }
+  toast("Опубликовано ✓","ok");renderQueue();
+}
+async function rejectPost(id){
+  try{await api("POST","/posts/"+id+"/reject");renderQueue();}
+  catch(e){toast(e&&e.message?e.message:"Ошибка","err");}
+}
 async function deletePost(id){
   try{await api("DELETE","/posts/"+id);renderQueue();}
   catch(e){toast(e&&e.message?e.message:"Ошибка","err");}

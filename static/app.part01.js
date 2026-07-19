@@ -1,12 +1,18 @@
 const API_BASE=(typeof window!=="undefined"&&window.API_BASE)||"";
+// Продакшен: необработанная ошибка не должна стирать весь интерфейс
+// пользователю -- это хуже, чем сама ошибка. Логируем полную информацию
+// в консоль (для отладки со скриншотом консоли), а на экране -- обычный
+// тост тем же способом, что и остальные ошибки в приложении. Если по
+// какой-то причине toast() ещё не готов -- не падаем молча, просто нет
+// визуала, страница всё равно остаётся рабочей.
 window.onerror = function(msg, src, line, col, err) {
-  document.body.innerHTML = '<div style="padding:20px;font-family:monospace;color:red">'
-    + '<b>JS Error:</b><br>' + msg + '<br>Line: ' + line + '</div>';
+  console.error('[JS Error]', msg, 'at', src + ':' + line + ':' + col, err);
+  try { toast('Что-то пошло не так. Попробуйте ещё раз.', 'err'); } catch (_) {}
   return false;
 };
 window.addEventListener('unhandledrejection', function(e) {
-  document.body.innerHTML = '<div style="padding:20px;font-family:monospace;color:red">'
-    + '<b>Promise Error:</b><br>' + (e.reason?.message || e.reason) + '</div>';
+  console.error('[Promise Error]', e.reason);
+  try { toast((e.reason && e.reason.message) || 'Что-то пошло не так. Попробуйте ещё раз.', 'err'); } catch (_) {}
 });
 
 // Автопост SPA — полная версия
@@ -241,5 +247,3 @@ function requireAuth(){
   renderAuth();
   return false;
 }
-
-async function refreshUser(){try{App.user=await api("GET","/me");}catch(_){}}

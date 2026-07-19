@@ -1,5 +1,7 @@
 
 
+async function refreshUser(){try{App.user=await api("GET","/me");}catch(_){}}
+
 async function go(view,channelId){
   // Task B rule 2: все представления через go() — защищённые действия
   // залогиненного пользователя. Проверяем один раз здесь, не дублируя в
