@@ -4,12 +4,19 @@ Telegram Bot API через httpx.
 """
 
 import logging
+import asyncio
 import re
 import httpx
 import config
 
 logger = logging.getLogger(__name__)
-API = "https://api.telegram.org/bot{token}/{method}"
+# Если задан TELEGRAM_API_BASE (релей на Cloudflare Workers) -- идём через
+# него вместо прямого api.telegram.org. Прямая связь Timeweb(РФ)->Telegram
+# нестабильна (~32% отказов на попытку соединения, 2026-07-19); релей решает
+# это на уровне сети, а не количеством попыток. Формат ответа идентичен
+# прямому Bot API -- воркер прозрачно пробрасывает запрос/ответ.
+_API_BASE = (config.TELEGRAM_API_BASE or "https://api.telegram.org").rstrip("/")
+API = _API_BASE + "/bot{token}/{method}"
 
 
 _TME_DOMAINS = r"(?:https?://)?(?:www\.)?(?:t\.me|telegram\.me)/"
@@ -204,12 +211,33 @@ async def send_message(chat: str, text: str) -> dict:
         # пробрасываем исключение -- publish_post в tasks.py ожидает именно
         # такую форму ответа.
         return {"ok": False, "description": str(e)}
-    return await _call("sendMessage", {
+
+    payload = {
         "chat_id": normalized,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": False,
-    })
+    }
+    # Публикация -- самое важное действие продукта, ей нужна такая же
+    # защита от нестабильной связи РФ->Telegram, что и verify_channel
+    # (~30% отказов на попытку соединения, см. замер 2026-07-19). Раньше
+    # тут был единственный вызов без повтора -- отсюда серия из 5 подряд
+    # неудачных публикаций у пользователя. До 3 полных попыток с паузой;
+    # если Telegram ответил содержательной ошибкой (не сетевой) -- не
+    # повторяем, отдаём её сразу, повтор её всё равно не исправит.
+    last_result = None
+    for attempt in range(3):
+        result = await _call("sendMessage", payload)
+        last_result = result
+        if result.get("ok"):
+            return result
+        desc = result.get("description", "")
+        if "network_error" not in desc:
+            return result
+        logger.warning(f"send_message: сетевой сбой на попытке {attempt + 1}/3, chat={normalized}")
+        if attempt < 2:
+            await asyncio.sleep(2 * (attempt + 1))
+    return last_result
 
 
 async def send_notification(tg_chat_id: int, text: str) -> tuple[bool, str]:

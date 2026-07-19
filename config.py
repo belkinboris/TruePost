@@ -27,6 +27,11 @@ YANDEX_API_MODE = os.getenv("YANDEX_API_MODE", "native").strip().lower()
 # Температура генерации постов (0..1). 0.7 -- живой текст без хаоса.
 # 0.3 даёт сухие шаблонные посты, 0.9+ -- риск бессвязности.
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+
+# Релей до Telegram Bot API через Cloudflare Workers (см. telegram_api.py).
+# Пусто по умолчанию = прямой api.telegram.org, поведение не меняется, пока
+# явно не задать адрес воркера. Формат: https://твой-воркер.workers.dev
+TELEGRAM_API_BASE = os.getenv("TELEGRAM_API_BASE", "").strip()
 YANDEX_MODEL_URI = os.getenv("YANDEX_MODEL_URI") or (
     f"gpt://{YANDEX_FOLDER_ID}/yandexgpt/latest" if YANDEX_FOLDER_ID else ""
 )
