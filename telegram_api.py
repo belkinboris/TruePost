@@ -80,6 +80,8 @@ def normalize_chat(raw: str) -> str:
 _TELEGRAM_ERROR_MAP = [
     # (паттерн в сыром description от Telegram, понятное русское сообщение)
     # Порядок важен — более специфичные паттерны идут раньше общих.
+    ("network_error",
+     "Telegram сейчас отвечает медленно. Подождите 20-30 секунд и нажмите «Проверить» ещё раз."),
     ("member list is inaccessible",
      "Не удалось получить список администраторов канала. Убедитесь, что @{bot} добавлен администратором, и попробуйте ещё раз."),
     ("not enough rights",
@@ -115,6 +117,8 @@ def _normalize_telegram_error(raw_description: str, chat: str = "", bot_username
 
 
 _PUBLISH_ERROR_MAP = [
+    ("network_error",
+     "Telegram сейчас отвечает медленно. Пост не потерян — попробуйте опубликовать ещё раз через минуту."),
     ("member list is inaccessible",
      "Не удалось опубликовать пост. Убедитесь, что @{bot} добавлен администратором канала."),
     ("not enough rights",
@@ -145,14 +149,51 @@ def normalize_publish_error(raw_description: str, bot_username: str = "") -> str
     return f"Не удалось опубликовать пост в Telegram. Проверьте подключение канала и попробуйте ещё раз."
 
 
+# ── Сетевой слой (фикс ConnectTimeout после переезда в РФ) ──────────────
+# Раньше на каждый вызов создавался новый AsyncClient => новое TCP+TLS
+# рукопожатие. Связь РФ-серверов с api.telegram.org нестабильна (троттлинг),
+# и именно фаза connect чаще всего отваливается: verify_channel делал три
+# вызова подряд тремя рукопожатиями и падал 500-кой (httpx.ConnectTimeout
+# в логах). Теперь:
+#   * один общий клиент с keep-alive — рукопожатие переживает десятки вызовов;
+#   * transport retries=3 — httpx сам повторяет ИМЕННО сбой соединения
+#     (на уже отправленные запросы не влияет, дублей sendMessage не будет);
+#   * connect-таймаут отдельно (12с) от общего чтения (30с);
+#   * любая сетевая ошибка превращается в {"ok": False, "description":
+#     "network_error..."} — наверх уходит нормальное русское сообщение,
+#     а не Internal Server Error.
+_client: httpx.AsyncClient | None = None
+
+
+def _get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None or _client.is_closed:
+        _client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=12.0, read=30.0, write=30.0, pool=30.0),
+            transport=httpx.AsyncHTTPTransport(retries=3),
+            limits=httpx.Limits(max_keepalive_connections=5, max_connections=10,
+                                keepalive_expiry=55.0),
+        )
+    return _client
+
+
 async def _call(method: str, payload: dict, token: str = None) -> dict:
     token = token or config.TELEGRAM_BOT_TOKEN
     if not token:
         return {"ok": False, "description": "TELEGRAM_BOT_TOKEN не задан"}
     url = API.format(token=token, method=method)
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(url, json=payload)
+    try:
+        r = await _get_client().post(url, json=payload)
         return r.json()
+    except httpx.HTTPError as e:
+        # ConnectTimeout / ReadTimeout / ConnectError и т.п. Сырую причину — в
+        # лог, наружу — маркер network_error, который карты ошибок переведут
+        # в человеческое сообщение.
+        logger.warning(f"telegram_api._call {method}: сеть до Telegram недоступна ({type(e).__name__})")
+        return {"ok": False, "description": f"network_error: {type(e).__name__}"}
+    except ValueError:
+        logger.warning(f"telegram_api._call {method}: не-JSON ответ от Telegram")
+        return {"ok": False, "description": "network_error: invalid response"}
 
 
 async def send_message(chat: str, text: str) -> dict:
@@ -213,6 +254,10 @@ async def verify_channel(chat: str) -> tuple[bool, str]:
 
     me = await _call("getMe", {})
     if not me.get("ok"):
+        desc = me.get("description", "")
+        logger.info(f"verification_error_code=getme_failed raw_telegram_error=«{desc}»")
+        if "network_error" in desc:
+            return False, _normalize_telegram_error(desc, chat=chat)
         return False, "Не удалось получить данные бота. Проверь TELEGRAM_BOT_TOKEN."
     bot_id = me["result"]["id"]
 
