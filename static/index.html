@@ -31,7 +31,27 @@
   <!-- /Yandex.Metrika counter -->
 </head>
 <body>
+  <style>
+    /* Компактный футер с юр. реквизитами -- раньше был только на /landing,
+       но эту страницу (форма входа) люди тоже открывают напрямую по голому
+       домену, и на ней не было ни одной ссылки на оферту/политику/реквизиты.
+       Использует переменные --text-faint/--text из static/styles.css,
+       уже подключённого этой страницей -- отдельного styles.css не тянем. */
+    .app-footer {
+      max-width: 1180px; margin: 0 auto; padding: 18px 24px 28px;
+      display: flex; gap: 16px; flex-wrap: wrap; justify-content: center;
+      color: var(--text-faint); font-size: 12px; text-align: center;
+    }
+    .app-footer a { color: var(--text-faint); text-decoration: none; }
+    .app-footer a:hover { color: var(--text); }
+  </style>
   <div id="app"><div style="display:flex;align-items:center;justify-content:center;min-height:100vh;color:#999;font-family:system-ui,sans-serif;font-size:14px">Загрузка…</div></div>
+  <footer class="app-footer">
+    <span>© АвтоПост · ИП Белкин Борис Ильич · ИНН 771387918350</span>
+    <a href="/legal/offer">Оферта</a>
+    <a href="/legal/privacy">Политика конфиденциальности</a>
+    <a href="/legal/refund">Возврат</a>
+  </footer>
   <script src="/static/app.part01.js?v=20260717a"></script>
   <script src="/static/app.part02.js?v=20260717a"></script>
   <script src="/static/app.part03.js?v=20260717a"></script>
