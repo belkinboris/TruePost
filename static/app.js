@@ -666,7 +666,7 @@ function renderNewChannelSettings(){
 
     <div class="card mt">
       <div class="toggle-row">
-        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если выключено — каждый пост ждёт вашего подтверждения перед публикацией.</small></div>
+        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала приходит вам в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать» и публикуется сам через ${App.cfg?.soft_control_minutes||30} мин, если не отреагируете.</small></div>
         <label class="switch"><input type="checkbox" id="ncs_auto"><span class="slider"></span></label>
       </div>
     </div>
@@ -1040,7 +1040,8 @@ async function renderConnectChannel(){
     <div class="hint" style="margin-top:14px;line-height:1.7">
       1. Открой канал → Управление → Администраторы<br>
       2. Добавь <b>@${esc(botUsername)}</b><br>
-      3. Включи право «Публиковать сообщения»
+      3. Включи право «Публиковать сообщения»<br>
+      <a href="/how-to" target="_blank" rel="noopener">Подробная инструкция с картинками →</a>
     </div>
 
     <label class="field mt"><span class="field-label">@username канала или ссылка t.me/</span>
