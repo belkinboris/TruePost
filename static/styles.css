@@ -155,6 +155,27 @@ label.field + label.field { margin-top: 16px; }
   font-size: 13px; color: var(--text-dim); line-height: 1.5; }
 .chan-connect-hint a { color: var(--accent-dark); font-weight: 600; }
 
+/* Календарь очереди (task item: вид по датам) */
+.cal-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.cal-month-label { font-weight: 600; font-size: 15px; text-transform: capitalize; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+.cal-cell { min-height: 56px; border-radius: 8px; padding: 6px 4px; background: var(--surface2); }
+.cal-cell-head { min-height: auto; background: none; text-align: center; font-size: 11px; font-weight: 600;
+  color: var(--text-faint); padding: 0 0 4px; }
+.cal-cell-empty { background: none; }
+.cal-cell-has { cursor: pointer; }
+.cal-cell-has:hover { background: var(--border-soft); }
+.cal-cell-today { border: 1.5px solid var(--accent); }
+.cal-cell-selected { background: var(--accent-soft); }
+.cal-daynum { font-size: 12px; color: var(--text-dim); }
+.cal-dots { display: flex; align-items: center; gap: 3px; margin-top: 6px; flex-wrap: wrap; }
+.cal-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+.cal-dot-published { background: var(--green); }
+.cal-dot-scheduled { background: var(--blue); }
+.cal-more { font-size: 10px; color: var(--text-faint); }
+.cal-legend { display: flex; gap: 16px; margin-top: 10px; font-size: 12px; color: var(--text-faint); }
+.cal-legend span { display: flex; align-items: center; gap: 5px; }
+
 .add-card { background: transparent; border: 1.5px dashed var(--border); border-radius: var(--radius);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   padding: 22px; min-height: 165px; cursor: pointer; transition: all .18s; color: var(--text-faint); }

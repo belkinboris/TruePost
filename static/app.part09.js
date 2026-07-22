@@ -152,6 +152,10 @@ async function renderChannel(){
   catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");return go("dashboard");}
   if(!$("app")) return; // DOM ещё не готов — прерываем
   try{c.daily_times=JSON.parse(c.daily_times||"[]");}catch(_){c.daily_times=[];}
+  // Сбрасываем вид очереди (список/календарь) при переходе на другой канал --
+  // иначе выбранный день/месяц календаря одного канала подставлялся бы под
+  // совсем другой канал.
+  if(App._chan && App._chan.id!==c.id){_queueViewMode="list";_calMonth=null;_calSelectedDate=null;}
   App._chan=c;
   const notConnected=!c.tg_chat?`<div style="background:var(--accent-soft);border:1px solid #e8d5bb;border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--accent-dark)">
     📡 Канал не подключён к Telegram.
