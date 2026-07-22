@@ -1,6 +1,32 @@
 
+// КРИТИЧНО (UX fix): "Опубликовать сейчас" раньше публиковало мгновенно и
+// безвозвратно в реальный Telegram-канал -- ни одной секунды на передумать,
+// даже для только что созданного поста, который никто ещё не смотрел
+// (например сразу после подключения канала). Тот же принцип "минута на
+// отмену", что уже есть в режиме "публикация после подтверждения" (см.
+// SOFT_CONTROL_FINAL_GRACE_SECONDS), теперь и здесь: клик запускает 60-сек
+// обратный отсчёт с кнопкой отмены вместо немедленной публикации.
+const _pendingPublish = {}; // postId -> {intervalId, timeoutId}
+
+function _publishBtnFor(id){
+  const card=$("pc_"+id);
+  return card?card.querySelector(`[onclick="publishPost(${id})"]`):null;
+}
+
 async function publishPost(id){
   if(!requireAuth()) return;
+
+  // Повторный клик во время отсчёта -- это отмена, не повторный запуск.
+  if(_pendingPublish[id]){
+    clearInterval(_pendingPublish[id].intervalId);
+    clearTimeout(_pendingPublish[id].timeoutId);
+    delete _pendingPublish[id];
+    const btn=_publishBtnFor(id);
+    if(btn) btn.textContent="Опубликовать сейчас";
+    toast("Публикация отменена","ok");
+    return;
+  }
+
   // P0 fix (third issue): если канал не подключён к Telegram, не пытаемся
   // публиковать вообще — показываем понятное сообщение вместо того чтобы
   // дать запросу дойти до Telegram API и упасть с технической ошибкой.
@@ -13,8 +39,26 @@ async function publishPost(id){
   const ta=$("pt_"+id);
   if(ta&&!ta.classList.contains("hidden")) try{await api("PATCH","/posts/"+id,{text:ta.value});}catch(_){}
 
-  const card=$("pc_"+id);
-  const btn=card?card.querySelector(`[onclick="publishPost(${id})"]`):null;
+  const _fmt=(s)=>`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  const btn=_publishBtnFor(id);
+  let secondsLeft=60;
+  if(btn) btn.textContent=`Отменить (${_fmt(secondsLeft)})`;
+  const intervalId=setInterval(()=>{
+    secondsLeft--;
+    if(secondsLeft<=0){clearInterval(intervalId);return;}
+    const liveBtn=_publishBtnFor(id);
+    if(liveBtn) liveBtn.textContent=`Отменить (${_fmt(secondsLeft)})`;
+  },1000);
+  const timeoutId=setTimeout(()=>{
+    delete _pendingPublish[id];
+    _doPublishPost(id);
+  },60000);
+  _pendingPublish[id]={intervalId,timeoutId};
+  toast("Опубликуется через минуту — можно отменить","ok");
+}
+
+async function _doPublishPost(id){
+  const btn=_publishBtnFor(id);
   if(btn){btn.innerHTML='<span class="spinner"></span> Публикуем…';btn.disabled=true;}
 
   const TIMEOUT_MS=18000;
