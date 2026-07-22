@@ -268,7 +268,7 @@ function renderSettings(){
         <label class="switch"><input type="checkbox" id="sw_n2" ${App.user?.notify_published?"checked":""}><span class="slider"></span></label>
       </div>
       <div class="toggle-row">
-        <div class="toggle-info"><b>Токены заканчиваются</b><small>~1 пост остался</small></div>
+        <div class="toggle-info"><b>Баланс заканчивается</b><small>Уведомим, когда постов почти не останется</small></div>
         <label class="switch"><input type="checkbox" id="sw_n3" ${App.user?.notify_low_tokens!==false?"checked":""}><span class="slider"></span></label>
       </div>
     </div>

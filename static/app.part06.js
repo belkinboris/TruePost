@@ -199,7 +199,7 @@ async function renderPublishConfirm(channelId, tgChat){
     <div class="page-head" style="text-align:center;margin-top:24px">
       <div style="font-size:36px;margin-bottom:6px">✅</div>
       <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Канал подключён</h1>
-      <p style="color:var(--text-dim)">Первый пост готов. Опубликовать его сейчас?</p>
+      <p style="color:var(--text-dim)">${pending?"Первый пост готов. Опубликовать его сейчас?":"Пока нет готового поста — можно создать новый."}</p>
     </div>
     ${pending?`<div class="card" style="font-size:14px;line-height:1.6;max-height:200px;overflow:hidden;position:relative">
       ${renderTg(pending.text)}
@@ -211,8 +211,8 @@ async function renderPublishConfirm(channelId, tgChat){
       id="cpc_publish_btn" ${pending?"":"disabled"}>Опубликовать сейчас</button>
 
     <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn-outline btn-sm" style="flex:1" onclick="go('channel',${channelId})">Оставить на проверке</button>
-      <button class="btn-outline btn-sm" style="flex:1" onclick="ccGoSchedule(${channelId},${pending?pending.id:"null"})" ${pending?"":"disabled"}>Запланировать</button>
+      <button class="btn-outline btn-sm" style="flex:1" onclick="_cancelPendingCcPublish(${pending?pending.id:"null"});go('channel',${channelId})">Оставить на проверке</button>
+      <button class="btn-outline btn-sm" style="flex:1" onclick="_cancelPendingCcPublish(${pending?pending.id:"null"});ccGoSchedule(${channelId},${pending?pending.id:"null"})" ${pending?"":"disabled"}>Запланировать</button>
     </div>
   </div>`;
 }

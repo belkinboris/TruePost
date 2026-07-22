@@ -52,7 +52,15 @@ async function boot(){
   try{ performance.mark('me_request_started'); }catch(_){}
   const tMeStart = performance.now();
   try{
-    App.user=await api("GET","/me");
+    // withTimeout(): та же причина что и у /channels в renderDashboard --
+    // без таймаута зависший fetch держал бы пользователя на скелете
+    // "Загружаем ваши каналы…" бесконечно, ни единой кнопки повтора.
+    // Бросаем обычный Error при таймауте -- он не совпадёт ни с одной из
+    // auth-подстрок ниже, поэтому пойдёт по ветке "временный сбой", НЕ
+    // логаутнет пользователя, покажет кнопку "Попробовать снова".
+    const {timedOut, result} = await withTimeout(api("GET","/me"), 25000, "timeout");
+    if(timedOut) throw new Error("Сервер долго не отвечает. Проверьте соединение.");
+    App.user=result;
     try{ performance.mark('me_request_finished'); }catch(_){}
     console.log(`[timing] /me: ${(performance.now()-tMeStart).toFixed(0)}ms`);
 

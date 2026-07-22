@@ -13,7 +13,13 @@ async function renderDashboard(){
   let channelsLoadFailed=false;
   const tChansStart = performance.now();
   try{
-    chans=await api("GET","/channels");
+    // withTimeout(): без него зависший (не отклонённый, не разрешённый)
+    // fetch держал бы пользователя на скелете "Загрузка…" бесконечно, без
+    // единой кнопки повтора -- ровно то, что видно как "вечная загрузка"
+    // при первом открытии Mini App на нестабильной сети.
+    const {timedOut, result} = await withTimeout(api("GET","/channels"), 25000, "timeout");
+    if(timedOut) throw new Error("Сервер долго не отвечает. Проверьте соединение.");
+    chans=result;
   }catch(e){
     channelsLoadFailed=true;
     const msg=(e&&e.message)||"";

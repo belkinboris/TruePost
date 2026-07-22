@@ -25,9 +25,51 @@ async function pollPostStatus(postId, maxWaitMs=20000, intervalMs=2000){
   return {confirmed:false, status:null};
 }
 
+// КРИТИЧНО (UX fix): тот же принцип "минута на отмену" что и в publishPost()
+// (app.part15.js) -- этот экран как раз и есть тот самый случай "сразу после
+// подключения канала", который был явно назван проблемой (см. комментарий
+// там). Раньше именно здесь публикация была абсолютно мгновенной.
+const _pendingCcPublish = {}; // postId -> {intervalId, timeoutId}
+
+function _cancelPendingCcPublish(postId){
+  if(postId && _pendingCcPublish[postId]){
+    clearInterval(_pendingCcPublish[postId].intervalId);
+    clearTimeout(_pendingCcPublish[postId].timeoutId);
+    delete _pendingCcPublish[postId];
+  }
+}
+
 async function ccConfirmPublish(channelId, postId, tgChat){
   if(!requireAuth()) return;
   if(!postId) return;
+
+  if(_pendingCcPublish[postId]){
+    _cancelPendingCcPublish(postId);
+    const btn=$("cpc_publish_btn");
+    if(btn) btn.textContent="Опубликовать сейчас";
+    toast("Публикация отменена","ok");
+    return;
+  }
+
+  const btn=$("cpc_publish_btn");
+  const _fmt=(s)=>`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  let secondsLeft=60;
+  if(btn) btn.textContent=`Отменить (${_fmt(secondsLeft)})`;
+  const intervalId=setInterval(()=>{
+    secondsLeft--;
+    if(secondsLeft<=0){clearInterval(intervalId);return;}
+    const liveBtn=$("cpc_publish_btn");
+    if(liveBtn) liveBtn.textContent=`Отменить (${_fmt(secondsLeft)})`;
+  },1000);
+  const timeoutId=setTimeout(()=>{
+    delete _pendingCcPublish[postId];
+    _doCcConfirmPublish(channelId, postId, tgChat);
+  },60000);
+  _pendingCcPublish[postId]={intervalId,timeoutId};
+  toast("Опубликуется через минуту — можно отменить","ok");
+}
+
+async function _doCcConfirmPublish(channelId, postId, tgChat){
   const btn=$("cpc_publish_btn");
   btn.innerHTML='<span class="spinner"></span> Публикуем…';btn.disabled=true;
 

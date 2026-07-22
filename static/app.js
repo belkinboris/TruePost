@@ -248,7 +248,17 @@ function requireAuth(){
   return false;
 }
 
-async function refreshUser(){try{App.user=await api("GET","/me");}catch(_){}}
+// КРИТИЧНО (UX fix): withTimeout() -- голый await api() здесь мог зависнуть
+// навсегда, если fetch не резолвится и не реджектится (нестабильная сеть,
+// зависшее TCP-соединение внутри Telegram Mini App WebView) -- вызывающий
+// код (renderDashboard и т.п.) тоже вис бы бесконечно на скелете загрузки
+// без единой кнопки "Попробовать снова".
+async function refreshUser(){
+  try{
+    const {timedOut, result} = await withTimeout(api("GET","/me"), 25000, "timeout");
+    if(!timedOut) App.user=result;
+  }catch(_){}
+}
 
 async function go(view,channelId){
   // Task B rule 2: все представления через go() — защищённые действия
@@ -474,7 +484,13 @@ async function renderDashboard(){
   let channelsLoadFailed=false;
   const tChansStart = performance.now();
   try{
-    chans=await api("GET","/channels");
+    // withTimeout(): без него зависший (не отклонённый, не разрешённый)
+    // fetch держал бы пользователя на скелете "Загрузка…" бесконечно, без
+    // единой кнопки повтора -- ровно то, что видно как "вечная загрузка"
+    // при первом открытии Mini App на нестабильной сети.
+    const {timedOut, result} = await withTimeout(api("GET","/channels"), 25000, "timeout");
+    if(timedOut) throw new Error("Сервер долго не отвечает. Проверьте соединение.");
+    chans=result;
   }catch(e){
     channelsLoadFailed=true;
     const msg=(e&&e.message)||"";
@@ -982,17 +998,19 @@ function fpFeedbackGood(channelId){
   logProductEvent("first_post_feedback", "good");
   const fb=$("fp_feedback_block");
   if(fb){
-    // Эксперимент commercial_bridge: мост от хорошего первого поста к
-    // регулярному ведению (тарифам). Превью тем -- статичный формат из
-    // about канала (полноценной логики подбора будущих тем в коде нет,
-    // генерировать по SPEC не нужно).
+    // Мост от хорошего первого поста к тарифам (иначе люди уходят до
+    // оплаты) -- намеренно ведёт на тарифы, не собирает очередь прямо
+    // здесь. Кнопка честно называет следующий шаг (выбор тарифа), не
+    // обещает мгновенное действие, которого на самом деле не происходит.
+    // Превью тем -- статичный формат из about канала (полноценной логики
+    // подбора будущих тем в коде нет, генерировать по SPEC не нужно).
     const about=(App._qsAbout||"вашей теме").slice(0,60);
     fb.innerHTML=`<p style="color:var(--ok,#2a9d5c);font-weight:500">Отлично! ✓</p>
       <div id="queue_offer_block" style="margin-top:14px;text-align:left;background:var(--surface);border:1.5px solid var(--border);border-radius:10px;padding:14px">
         <p style="font-weight:600;margin-bottom:6px">Соберём очередь на неделю?</p>
         <p style="color:var(--text-dim);font-size:14px;line-height:1.5">Автопост подготовит 7 постов по вашей теме — по одному на каждый день. Вы просто просматриваете и публикуете.</p>
         <p style="color:var(--text-faint);font-size:13px;margin-top:8px">Например: «${esc(about)} — тема 1», «${esc(about)} — тема 2», «${esc(about)} — тема 3»…</p>
-        <button class="btn" style="width:100%;justify-content:center;margin-top:12px;padding:12px" onclick="queueOfferClick()">Собрать очередь</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-top:12px;padding:12px" onclick="queueOfferClick()">Выбрать тариф и начать →</button>
       </div>`;
     logProductEvent("queue_offer_shown");
   }
@@ -1204,7 +1222,7 @@ async function renderPublishConfirm(channelId, tgChat){
     <div class="page-head" style="text-align:center;margin-top:24px">
       <div style="font-size:36px;margin-bottom:6px">✅</div>
       <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Канал подключён</h1>
-      <p style="color:var(--text-dim)">Первый пост готов. Опубликовать его сейчас?</p>
+      <p style="color:var(--text-dim)">${pending?"Первый пост готов. Опубликовать его сейчас?":"Пока нет готового поста — можно создать новый."}</p>
     </div>
     ${pending?`<div class="card" style="font-size:14px;line-height:1.6;max-height:200px;overflow:hidden;position:relative">
       ${renderTg(pending.text)}
@@ -1216,8 +1234,8 @@ async function renderPublishConfirm(channelId, tgChat){
       id="cpc_publish_btn" ${pending?"":"disabled"}>Опубликовать сейчас</button>
 
     <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn-outline btn-sm" style="flex:1" onclick="go('channel',${channelId})">Оставить на проверке</button>
-      <button class="btn-outline btn-sm" style="flex:1" onclick="ccGoSchedule(${channelId},${pending?pending.id:"null"})" ${pending?"":"disabled"}>Запланировать</button>
+      <button class="btn-outline btn-sm" style="flex:1" onclick="_cancelPendingCcPublish(${pending?pending.id:"null"});go('channel',${channelId})">Оставить на проверке</button>
+      <button class="btn-outline btn-sm" style="flex:1" onclick="_cancelPendingCcPublish(${pending?pending.id:"null"});ccGoSchedule(${channelId},${pending?pending.id:"null"})" ${pending?"":"disabled"}>Запланировать</button>
     </div>
   </div>`;
 }
@@ -1247,9 +1265,51 @@ async function pollPostStatus(postId, maxWaitMs=20000, intervalMs=2000){
   return {confirmed:false, status:null};
 }
 
+// КРИТИЧНО (UX fix): тот же принцип "минута на отмену" что и в publishPost()
+// (app.part15.js) -- этот экран как раз и есть тот самый случай "сразу после
+// подключения канала", который был явно назван проблемой (см. комментарий
+// там). Раньше именно здесь публикация была абсолютно мгновенной.
+const _pendingCcPublish = {}; // postId -> {intervalId, timeoutId}
+
+function _cancelPendingCcPublish(postId){
+  if(postId && _pendingCcPublish[postId]){
+    clearInterval(_pendingCcPublish[postId].intervalId);
+    clearTimeout(_pendingCcPublish[postId].timeoutId);
+    delete _pendingCcPublish[postId];
+  }
+}
+
 async function ccConfirmPublish(channelId, postId, tgChat){
   if(!requireAuth()) return;
   if(!postId) return;
+
+  if(_pendingCcPublish[postId]){
+    _cancelPendingCcPublish(postId);
+    const btn=$("cpc_publish_btn");
+    if(btn) btn.textContent="Опубликовать сейчас";
+    toast("Публикация отменена","ok");
+    return;
+  }
+
+  const btn=$("cpc_publish_btn");
+  const _fmt=(s)=>`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  let secondsLeft=60;
+  if(btn) btn.textContent=`Отменить (${_fmt(secondsLeft)})`;
+  const intervalId=setInterval(()=>{
+    secondsLeft--;
+    if(secondsLeft<=0){clearInterval(intervalId);return;}
+    const liveBtn=$("cpc_publish_btn");
+    if(liveBtn) liveBtn.textContent=`Отменить (${_fmt(secondsLeft)})`;
+  },1000);
+  const timeoutId=setTimeout(()=>{
+    delete _pendingCcPublish[postId];
+    _doCcConfirmPublish(channelId, postId, tgChat);
+  },60000);
+  _pendingCcPublish[postId]={intervalId,timeoutId};
+  toast("Опубликуется через минуту — можно отменить","ok");
+}
+
+async function _doCcConfirmPublish(channelId, postId, tgChat){
   const btn=$("cpc_publish_btn");
   btn.innerHTML='<span class="spinner"></span> Публикуем…';btn.disabled=true;
 
@@ -1837,14 +1897,14 @@ function renderPostCard(p, pubMs, channelEnabled){
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     menuItems=`
       <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">⏰ Запланировать</button>
-      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>
+      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Отклонить</button>
       <button class="menu-item" onclick="closePostMenu(${p.id});regenPost(${p.id})" id="regen_${p.id}">↻ Сгенерировать заново</button>`;
   } else if(sched){
     primaryBtn=`<button class="btn-outline btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="publishPost(${p.id})" ${publishDisabledAttr}>Опубликовать сейчас</button>`;
     menuItems=`
       <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">📅 Перенести</button>
-      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>`;
+      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Отклонить</button>`;
   } else if(p.status==="published"){
     const chatLabel=(App._chan?.tg_chat||"").replace(/^https?:\/\/t\.me\//i,"").replace(/^@/,"");
     const tgUrl=p.tg_message_id&&chatLabel?`https://t.me/${chatLabel}/${p.tg_message_id}`:`https://t.me/${chatLabel}`;
@@ -2216,7 +2276,7 @@ function renderSettings(){
         <label class="switch"><input type="checkbox" id="sw_n2" ${App.user?.notify_published?"checked":""}><span class="slider"></span></label>
       </div>
       <div class="toggle-row">
-        <div class="toggle-info"><b>Токены заканчиваются</b><small>~1 пост остался</small></div>
+        <div class="toggle-info"><b>Баланс заканчивается</b><small>Уведомим, когда постов почти не останется</small></div>
         <label class="switch"><input type="checkbox" id="sw_n3" ${App.user?.notify_low_tokens!==false?"checked":""}><span class="slider"></span></label>
       </div>
     </div>
@@ -2240,12 +2300,16 @@ async function testPost(){
     const posts=await api("GET","/channels/"+App._chan.id+"/posts");
     const p=posts.find(x=>x.id===r.post_id)||{text:"",tokens_used:0,id:r.post_id};
     trackGoal("post_generated",{source:"test",channel_id:App._chan.id});
-    $("test_result").innerHTML=`<div class="card" style="background:var(--surface2)">
+    // id="pc_{id}" -- без него publishPost() (app.part15.js) не находит
+    // кнопку по её обычному пути поиска и не может показать отсчёт отмены,
+    // из-за чего публикация тихо срабатывает через минуту без единого
+    // видимого предупреждения на этой карточке.
+    $("test_result").innerHTML=`<div class="card" id="pc_${p.id}" style="background:var(--surface2)">
 
       <div class="post-body">${renderTg(p.text)}</div>
       <div class="post-actions" style="margin-top:10px">
         <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Опубликовать</button>
-        <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Удалить</button>
+        <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Отклонить</button>
       </div></div>`;
   }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
   btn.innerHTML="▷ Создать тестовый пост";btn.disabled=false;
@@ -3060,7 +3124,15 @@ async function boot(){
   try{ performance.mark('me_request_started'); }catch(_){}
   const tMeStart = performance.now();
   try{
-    App.user=await api("GET","/me");
+    // withTimeout(): та же причина что и у /channels в renderDashboard --
+    // без таймаута зависший fetch держал бы пользователя на скелете
+    // "Загружаем ваши каналы…" бесконечно, ни единой кнопки повтора.
+    // Бросаем обычный Error при таймауте -- он не совпадёт ни с одной из
+    // auth-подстрок ниже, поэтому пойдёт по ветке "временный сбой", НЕ
+    // логаутнет пользователя, покажет кнопку "Попробовать снова".
+    const {timedOut, result} = await withTimeout(api("GET","/me"), 25000, "timeout");
+    if(timedOut) throw new Error("Сервер долго не отвечает. Проверьте соединение.");
+    App.user=result;
     try{ performance.mark('me_request_finished'); }catch(_){}
     console.log(`[timing] /me: ${(performance.now()-tMeStart).toFixed(0)}ms`);
 

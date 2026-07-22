@@ -171,17 +171,19 @@ function fpFeedbackGood(channelId){
   logProductEvent("first_post_feedback", "good");
   const fb=$("fp_feedback_block");
   if(fb){
-    // Эксперимент commercial_bridge: мост от хорошего первого поста к
-    // регулярному ведению (тарифам). Превью тем -- статичный формат из
-    // about канала (полноценной логики подбора будущих тем в коде нет,
-    // генерировать по SPEC не нужно).
+    // Мост от хорошего первого поста к тарифам (иначе люди уходят до
+    // оплаты) -- намеренно ведёт на тарифы, не собирает очередь прямо
+    // здесь. Кнопка честно называет следующий шаг (выбор тарифа), не
+    // обещает мгновенное действие, которого на самом деле не происходит.
+    // Превью тем -- статичный формат из about канала (полноценной логики
+    // подбора будущих тем в коде нет, генерировать по SPEC не нужно).
     const about=(App._qsAbout||"вашей теме").slice(0,60);
     fb.innerHTML=`<p style="color:var(--ok,#2a9d5c);font-weight:500">Отлично! ✓</p>
       <div id="queue_offer_block" style="margin-top:14px;text-align:left;background:var(--surface);border:1.5px solid var(--border);border-radius:10px;padding:14px">
         <p style="font-weight:600;margin-bottom:6px">Соберём очередь на неделю?</p>
         <p style="color:var(--text-dim);font-size:14px;line-height:1.5">Автопост подготовит 7 постов по вашей теме — по одному на каждый день. Вы просто просматриваете и публикуете.</p>
         <p style="color:var(--text-faint);font-size:13px;margin-top:8px">Например: «${esc(about)} — тема 1», «${esc(about)} — тема 2», «${esc(about)} — тема 3»…</p>
-        <button class="btn" style="width:100%;justify-content:center;margin-top:12px;padding:12px" onclick="queueOfferClick()">Собрать очередь</button>
+        <button class="btn" style="width:100%;justify-content:center;margin-top:12px;padding:12px" onclick="queueOfferClick()">Выбрать тариф и начать →</button>
       </div>`;
     logProductEvent("queue_offer_shown");
   }
