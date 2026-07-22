@@ -102,8 +102,11 @@ function renderChanCard(c){
     ? `<div class="status-subline"${countdownAttr}>⏱ считаем…</div>`
     : `<div class="status-subline">${esc(subLine)}</div>`;
 
+  // renderTg(), не esc(): next_post_preview содержит настоящую Telegram-разметку
+  // (<b>/<i> как в посте) — esc() экранировал её в текст, и в превью буквально
+  // было видно "<b>...</b>" вместо жирного выделения.
   const preview=c.next_post_preview
-    ? `<div class="chan-preview">${esc(c.next_post_preview)}</div>`
+    ? `<div class="chan-preview">${renderTg(c.next_post_preview)}</div>`
     : `<div class="chan-preview chan-preview-empty">Очередь пуста — посты скоро появятся</div>`;
 
   return `<div class="chan-card" onclick="go('channel',${c.id})">

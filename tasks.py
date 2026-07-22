@@ -141,7 +141,17 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
             "channel_deleted": True,
         }
 
-    # Загружаем заголовки последних постов чтобы не повторять темы
+    # Загружаем заголовки последних постов чтобы не повторять темы.
+    #
+    # КРИТИЧНО: раньше учитывались только status=="published" -- для канала
+    # в режиме "публикация после подтверждения" посты подолгу сидят в
+    # pending/scheduled и не становятся published, пока пользователь явно
+    # не подтвердит (или не пройдёт таймаут). Из-за этого проверка на
+    # повтор темы была слепа к уже СГЕНЕРИРОВАННЫМ, но ещё не опубликованным
+    # постам -- при узкой теме (например "кошки") это привело к тому, что
+    # одна и та же новость (кот из Эрмитажа, кот спасён дроном) генерировалась
+    # заново каждый цикл, потому что ни один из уже стоящих в очереди постов
+    # об этом не учитывался. Теперь смотрим на все НЕ отклонённые посты.
     recent_titles = ""
     try:
         with session() as s:
@@ -149,8 +159,8 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
             recent_posts = s.exec(
                 sel(Post).where(
                     Post.channel_id == channel_id,
-                    Post.status == "published"
-                ).order_by(Post.published_at.desc()).limit(30)
+                    Post.status.in_(["pending", "scheduled", "published"])
+                ).order_by(Post.created_at.desc()).limit(30)
             ).all()
             titles = []
             for p in recent_posts:

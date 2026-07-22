@@ -160,25 +160,39 @@ async function renderChannel(){
   const notConnected=!c.tg_chat?`<div style="background:var(--accent-soft);border:1px solid #e8d5bb;border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--accent-dark)">
     📡 Канал не подключён к Telegram.
     <button class="btn-ghost btn-sm" onclick="App.tab='settings';renderChannel()" style="color:var(--accent);font-weight:600">Подключить →</button></div>`:"";
+
+  // Тот же визуальный язык что и карточки на дашборде (renderChanCard,
+  // app.part03.js) — раньше здесь были старые chip-пилюли, не обновлённые
+  // при редизайне карточек.
+  const initial=(c.title||"?").trim().charAt(0).toUpperCase()||"?";
+  const connected=!!(c.tg_chat && c.verified);
+  let statusLabel, dotClass;
+  if(!connected){
+    statusLabel=c.tg_chat?"Бот пока не подтверждён администратором":"Канал не подключён"; dotClass="status-dot-gray";
+  } else if(c.auto_publish){
+    statusLabel="Автоматическая публикация"; dotClass="status-dot-green";
+  } else {
+    statusLabel="Публикация после подтверждения"; dotClass="status-dot-accent";
+  }
+  const subLine=c.enabled===false?"На паузе":(connected?`⏱ Следующая генерация ${_nextGenerationLabel(c)}`:"");
+
   $("app").innerHTML=topbar("dashboard","все каналы")+`<div class="wrap">
     ${notConnected}
     <div class="chan-header card" style="margin-bottom:16px">
-      <div style="display:flex;flex-direction:column;gap:12px">
-        <div>
+      <div class="chan-card-top">
+        <div class="tg-ava" style="width:52px;height:52px;font-size:22px">${esc(initial)}</div>
+        <div style="min-width:0">
           <h2 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">${esc(c.title)}</h2>
-          <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
-            ${c.verified?`<span class="chip chip-green">● подключён</span>`:`<span class="chip chip-orange">● не проверен</span>`}
-            <span class="chip chip-gray">🕑 ${_intervalLabel(c.interval_hours||12)}</span>
-            ${c.tg_chat?`<span class="chip chip-gray" style="font-family:monospace">${esc(c.tg_chat)}</span>`:""}
-          </div>
-          ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:8px;max-width:500px">${esc(c.about)}</p>`:""}
-          ${c.enabled?`<p style="font-size:13px;color:var(--blue);margin-top:6px;font-weight:500">⏱ Следующая генерация ${_nextGenerationLabel(c)}</p>`:""}
+          <div class="chan-handle">${c.tg_chat?esc(c.tg_chat):"канал не указан"}</div>
         </div>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
-          <button class="${c.enabled?'btn-outline btn-sm':'btn btn-sm'}" onclick="toggleChannelEnabled()"
-            id="pause_btn">${c.enabled?'⏸ Пауза':'▶ Возобновить'}</button>
-        </div>
+      </div>
+      <div class="status-line"><span class="status-dot ${dotClass}"></span>${statusLabel}</div>
+      ${subLine?`<div class="status-subline">${subLine}</div>`:""}
+      ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:10px;max-width:500px">${esc(c.about)}</p>`:""}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+        <button class="btn btn-sm" onclick="openGenPanel()">✦ Создать пост</button>
+        <button class="${c.enabled?'btn-outline btn-sm':'btn btn-sm'}" onclick="toggleChannelEnabled()"
+          id="pause_btn">${c.enabled?'⏸ Пауза':'▶ Возобновить'}</button>
       </div>
     </div>
     <div class="gen-panel hidden" id="genPanel">
