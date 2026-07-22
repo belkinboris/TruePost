@@ -9,11 +9,25 @@ document.addEventListener("click",e=>{
   }
 });
 
+let _queueViewMode="list"; // "list" | "calendar" -- сбрасывается на "list" при каждом заходе на новый канал (см. renderChannel)
+
 async function renderQueue(){
   $("tabbody").innerHTML=`<div id="postList"><div class="text-faint" style="padding:20px">Загрузка…</div></div>`;
   let posts=[];
   try{posts=await api("GET","/channels/"+App._chan.id+"/posts");}catch(e){}
+  App._queuePosts=posts; // календарь и переключение вида работают без повторного запроса
 
+  $("tabbody").innerHTML=`<div id="postList"></div>`;
+  renderQueueBody();
+}
+
+function setQueueViewMode(mode){
+  _queueViewMode=mode;
+  renderQueueBody();
+}
+
+function renderQueueBody(){
+  const posts=App._queuePosts||[];
   const pending=posts.filter(p=>p.status==="pending"||p.status==="onboarding"||p.status==="scheduled");
   const history=posts.filter(p=>p.status==="published"||p.status==="rejected");
   const c=App._chan;
@@ -24,7 +38,7 @@ async function renderQueue(){
   const autoPublishInfo = c.auto_publish
     ? `<div class="card" style="background:var(--blue-bg);border:none;margin-bottom:14px;padding:14px 16px">
         <div style="font-size:13px;color:var(--blue);font-weight:600">Автоматическая публикация</div>
-        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Посты будут выходить по расписанию каждые ${_intervalLabel(c.interval_hours||12)}.</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Посты будут выходить по расписанию ${_intervalLabel(c.interval_hours||12)}.</div>
         <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--blue)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Изменить</button>
       </div>`
     : `<div class="card" style="background:var(--accent-soft);border:none;margin-bottom:14px;padding:14px 16px">
@@ -33,7 +47,19 @@ async function renderQueue(){
         <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--accent-dark)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Открыть настройки</button>
       </div>`;
 
-  let html=autoPublishInfo;
+  const viewToggle=`<div style="display:flex;gap:8px;margin-bottom:14px">
+    <button class="btn-sm ${_queueViewMode==="list"?"btn":"btn-outline"}" onclick="setQueueViewMode('list')">📋 Список</button>
+    <button class="btn-sm ${_queueViewMode==="calendar"?"btn":"btn-outline"}" onclick="setQueueViewMode('calendar')">🗓 Календарь</button>
+  </div>`;
+
+  let html=autoPublishInfo+viewToggle;
+
+  if(_queueViewMode==="calendar"){
+    html+=renderQueueCalendar(posts);
+    $("postList").innerHTML=html;
+    return;
+  }
+
   if(!pending.length){
     const paused = c && !c.enabled;
     html+=paused
@@ -65,6 +91,93 @@ async function renderQueue(){
   startNearestCountdown();
 }
 
+// ── КАЛЕНДАРЬ (task item: вид очереди по датам) ────────────────────────
+// Показывает посты, у которых есть конкретная дата: опубликованные
+// (published_at) и явно запланированные (scheduled_at, статус "scheduled").
+// Посты в режиме "публикация после подтверждения" (pending) намеренно не
+// показываются на календаре -- у них ещё нет фиксированной даты публикации,
+// она зависит от того, когда/подтвердит ли пользователь пост (см. очередь
+// в виде списка для них).
+let _calMonth=null; // Date (1-е число месяца, локальное время) -- null = текущий месяц при первом открытии
+let _calSelectedDate=null; // "YYYY-MM-DD" -- какой день сейчас раскрыт под календарём
+
+function _dateKey(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function changeCalMonth(delta){
+  const m=_calMonth||new Date();
+  _calMonth=new Date(m.getFullYear(), m.getMonth()+delta, 1);
+  _calSelectedDate=null;
+  renderQueueBody();
+}
+
+function selectCalDate(key){
+  _calSelectedDate=(_calSelectedDate===key)?null:key;
+  renderQueueBody();
+}
+
+function renderQueueCalendar(posts){
+  const monthDate=_calMonth||new Date();
+  const year=monthDate.getFullYear(), month=monthDate.getMonth();
+
+  const byDate={};
+  posts.forEach(p=>{
+    let d=null, kind=null;
+    if(p.status==="published" && p.published_at){ d=new Date(p.published_at+"Z"); kind="published"; }
+    else if(p.status==="scheduled" && p.scheduled_at){ d=new Date(p.scheduled_at+"Z"); kind="scheduled"; }
+    if(!d) return;
+    const key=_dateKey(d);
+    (byDate[key]=byDate[key]||[]).push({...p, _calKind:kind, _calTime:d});
+  });
+
+  const firstOfMonth=new Date(year,month,1);
+  const daysInMonth=new Date(year,month+1,0).getDate();
+  // Понедельник = 0 (российская неделя)
+  const leadingBlanks=(firstOfMonth.getDay()+6)%7;
+  const todayKey=_dateKey(new Date());
+
+  let cells="";
+  for(let i=0;i<leadingBlanks;i++) cells+=`<div class="cal-cell cal-cell-empty"></div>`;
+  for(let day=1;day<=daysInMonth;day++){
+    const key=`${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+    const items=(byDate[key]||[]).sort((a,b)=>a._calTime-b._calTime);
+    const isToday=key===todayKey;
+    const isSelected=key===_calSelectedDate;
+    const dots=items.slice(0,3).map(it=>`<span class="cal-dot cal-dot-${it._calKind}"></span>`).join("");
+    const more=items.length>3?`<span class="cal-more">+${items.length-3}</span>`:"";
+    cells+=`<div class="cal-cell${isToday?" cal-cell-today":""}${isSelected?" cal-cell-selected":""}${items.length?" cal-cell-has":""}"
+      ${items.length?`onclick="selectCalDate('${key}')"`:""}>
+      <div class="cal-daynum">${day}</div>
+      ${items.length?`<div class="cal-dots">${dots}${more}</div>`:""}
+    </div>`;
+  }
+
+  const monthLabel=monthDate.toLocaleDateString("ru-RU",{month:"long",year:"numeric"});
+  const weekHead=["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(d=>`<div class="cal-cell cal-cell-head">${d}</div>`).join("");
+
+  let selectedBlock="";
+  if(_calSelectedDate && byDate[_calSelectedDate]){
+    const dLabel=new Date(_calSelectedDate+"T00:00:00").toLocaleDateString("ru-RU",{day:"numeric",month:"long"});
+    selectedBlock=`<div style="margin-top:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h3 style="margin:0">${dLabel}</h3>
+        <button class="btn-ghost btn-sm" onclick="selectCalDate('${_calSelectedDate}')">✕ Закрыть</button>
+      </div>
+      ${byDate[_calSelectedDate].map(p=>renderPostCard(p, p.scheduled_at?new Date(p.scheduled_at+"Z").getTime():null, App._chan.enabled)).join("")}
+    </div>`;
+  }
+
+  return `<div class="cal-nav">
+    <button class="btn-ghost btn-sm" onclick="changeCalMonth(-1)">‹</button>
+    <div class="cal-month-label">${monthLabel}</div>
+    <button class="btn-ghost btn-sm" onclick="changeCalMonth(1)">›</button>
+  </div>
+  <div class="cal-grid">${weekHead}${cells}</div>
+  <div class="cal-legend"><span><span class="cal-dot cal-dot-published"></span> Опубликован</span><span><span class="cal-dot cal-dot-scheduled"></span> Запланирован</span></div>
+  ${selectedBlock}`;
+}
+
 
 // SETTINGS
 function renderSettings(){
@@ -86,14 +199,14 @@ function renderSettings(){
                  <input id="f_chat" value="${esc(c.tg_chat)}" placeholder="@my_channel" style="flex:1">
                  <button class="btn-outline btn-sm" onclick="verifyChannel()" id="verBtn" style="white-space:nowrap">Проверить</button>
                </div>
-               <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации.</div>
+               <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации. <a href="/how-to" target="_blank" rel="noopener">Как это сделать →</a></div>
                <div id="verMsg" style="font-size:13px;margin-top:6px"></div>
              </div>`
           : `<div class="row" style="gap:8px">
                <input id="f_chat" value="${esc(c.tg_chat)}" placeholder="@my_channel" style="flex:1">
                <button class="btn-outline btn-sm" onclick="verifyChannel()" id="verBtn" style="white-space:nowrap">Проверить</button>
              </div>
-             <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации.</div>
+             <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации. <a href="/how-to" target="_blank" rel="noopener">Как это сделать →</a></div>
              <div id="verMsg" style="font-size:13px;margin-top:6px"></div>`
         }
       </label>

@@ -41,8 +41,7 @@ async function renderBilling(){
     </div>
     <div style="text-align:center;margin-top:16px;padding-bottom:8px">
       <button class="btn-danger btn-sm" onclick="deleteAccount()" style="font-size:12px;opacity:.6">Удалить аккаунт</button>
-    </div>
-    ${renderFooter()}</div>`;
+    </div></div>`;
   try{
     const me=await api("GET","/me");const code=me.ref_code||"";
     $("ref_block").innerHTML=`

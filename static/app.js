@@ -275,11 +275,66 @@ async function renderNewChannelRouter(){
 }
 
 // AUTH
+function _tgAuthInitData(){
+  try{ return window.Telegram?.WebApp?.initData || ""; }catch(_){ return ""; }
+}
+function _tgAuthFirstName(){
+  try{ return window.Telegram?.WebApp?.initDataUnsafe?.user?.first_name || "Telegram"; }catch(_){ return "Telegram"; }
+}
+function toggleTgEmailFallback(){
+  const c=$("email_auth_card");
+  if(c) c.style.display = c.style.display==="none" ? "" : "none";
+}
+async function tgContinueAuth(){
+  const initData=_tgAuthInitData();
+  if(!initData) return;
+  const btn=$("tgContinueBtn");
+  const originalLabel=btn?btn.innerHTML:"";
+  if(btn){btn.innerHTML='<span class="spinner"></span> Входим…';btn.disabled=true;}
+  const body={init_data:initData};
+  try{
+    const lpSession=localStorage.getItem("ap_lp_session");
+    if(lpSession){
+      body.lp_session=lpSession;
+      const utm=JSON.parse(localStorage.getItem("ap_lp_utm")||"{}");
+      if(utm.utm_source) body.utm_source=utm.utm_source;
+      if(utm.utm_medium) body.utm_medium=utm.utm_medium;
+      if(utm.utm_campaign) body.utm_campaign=utm.utm_campaign;
+      if(utm.utm_content) body.utm_content=utm.utm_content;
+    }
+  }catch(_){}
+  try{
+    const r=await api("POST","/auth/telegram_miniapp",body);
+    App.token=r.token;localStorage.setItem("ap_token",r.token);
+    trackGoal(r.is_new?"register_success":"login_success");
+    tgHaptic("success");
+    await boot();
+  }catch(e){
+    tgHaptic("error");
+    toast(e&&e.message?e.message:"Не удалось войти через Telegram","err");
+    if(btn){btn.innerHTML=originalLabel;btn.disabled=false;}
+  }
+}
+
 function renderAuth(mode="login"){
+  // Task item 4 (Mini App): если открыто внутри Telegram (initData
+  // присутствует) и токена ещё нет — предлагаем вход в одно нажатие вместо
+  // формы email/пароль. Форма email остаётся доступна ссылкой ниже — не
+  // теряем пользователей, у которых уже есть аккаунт с другого устройства/
+  // браузера (initData там недоступна, а localStorage Telegram WebView не
+  // делится с обычным браузером).
+  const tgInitData=_tgAuthInitData();
   $("app").innerHTML=`<div class="auth-wrap"><div class="auth-box">
     <div class="auth-logo">Авто<span>пост</span></div>
     <div class="auth-sub">ИИ ведёт твой Telegram-канал на автопилоте</div>
-    <div class="card">
+    ${tgInitData?`<div class="card" style="text-align:center">
+      <div style="font-size:14px;color:var(--text-dim);margin-bottom:14px">Вы открыли АвтоПост в Telegram</div>
+      <button class="btn" style="width:100%;justify-content:center;padding:14px" id="tgContinueBtn" onclick="tgContinueAuth()">Продолжить как ${esc(_tgAuthFirstName())}</button>
+      <div style="margin-top:12px">
+        <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="toggleTgEmailFallback()">Уже есть аккаунт с email? →</button>
+      </div>
+    </div>`:""}
+    <div class="card" id="email_auth_card" style="${tgInitData?"display:none;margin-top:14px":""}">
       <label class="field"><span class="field-label">Email</span>
         <input id="em" type="email" placeholder="you@mail.ru" autocomplete="username"></label>
       <label class="field mt"><span class="field-label">Пароль</span>
@@ -379,14 +434,6 @@ function topbar(backView,backLabel){
     </div></div>${lowBanner}${back}`;
 }
 
-function renderFooter(){
-  return `<div style="margin-top:auto;text-align:center;padding:48px 16px 24px;font-size:12px;color:var(--text-faint);line-height:1.8">
-    ИП Белкин Б.Б. · ИНН 771387918350 · ОГРНИП 324774600432188<br>
-    <a href="/legal/offer" target="_blank" style="color:var(--text-faint)">Оферта</a> &nbsp;·&nbsp;
-    <a href="/legal/privacy" target="_blank" style="color:var(--text-faint)">Конфиденциальность</a> &nbsp;·&nbsp;
-    <a href="/legal/refund" target="_blank" style="color:var(--text-faint)">Возврат</a></div>`;
-}
-
 // DASHBOARD
 function _intervalLabel(h){
   if(h<1) return `${Math.round(h*60)} мин`;
@@ -469,30 +516,70 @@ async function renderDashboard(){
         <div class="grid grid-3">
           <div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
             <div style="font-size:14px;font-weight:500">Новый канал</div></div>
-        </div>
-        <div id="dash_footer"></div></div>`;
-      const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
+        </div></div>`;
       return;
     }
     return renderQuickStart(); // новый пользователь — сразу к первому посту, без пустого дашборда
   }
   $("app").innerHTML=topbar()+`<div class="wrap">
     <div class="page-head"><h1>Твои каналы</h1><p>ИИ пишет посты сам — тебе только выбирать лучший.</p></div>
-    <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
-    <div id="dash_footer"></div></div>`;
-  const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
-  $("chans").innerHTML=chans.map(c=>{
-    const verified=c.verified?`<span class="chip chip-green">● подключён</span>`:`<span class="chip chip-orange">● не проверен</span>`;
-    return `<div class="chan-card" onclick="go('channel',${c.id})">
-      <h3>${esc(c.title)}</h3>
-      <div class="chan-handle">${esc(c.tg_chat||"не подключён")}</div>
-      <div class="chan-about">${esc(c.about)||"<span class='text-faint'>тема не задана</span>"}</div>
-      <div class="chan-foot">${verified}
-        <span class="chip chip-gray">🕑 ${_intervalLabel(c.interval_hours||12)}</span>
-        <span class="chip chip-blue">⏱ ${_nextGenerationLabel(c)}</span>
-      </div></div>`;
-  }).join("")+`<div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
+    <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div></div>`;
+  $("chans").innerHTML=chans.map(c=>renderChanCard(c)).join("")+`<div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
     <div style="font-size:14px;font-weight:500">Новый канал</div></div>`;
+  startDashboardCountdowns();
+}
+
+function renderChanCard(c){
+  const initial=(c.title||"?").trim().charAt(0).toUpperCase()||"?";
+  const connected=!!(c.tg_chat && c.verified);
+  const handle=c.tg_chat?esc(c.tg_chat):"канал не указан";
+
+  if(!connected){
+    const hint=c.tg_chat?"Бот пока не подтверждён администратором.":"Канал ещё не подключён.";
+    return `<div class="chan-card" onclick="go('channel',${c.id})">
+      <div class="chan-card-top">
+        <div class="tg-ava">${initial}</div>
+        <div style="min-width:0">
+          <h3>${esc(c.title)}</h3>
+          <div class="chan-handle">${handle}</div>
+        </div>
+      </div>
+      <div class="chan-connect-hint">${hint} <a href="/how-to" target="_blank" rel="noopener" onclick="event.stopPropagation()">Как подключить →</a></div>
+    </div>`;
+  }
+
+  let statusLabel, dotClass, subLine;
+  if(c.auto_publish){
+    statusLabel="Автоматическая публикация"; dotClass="status-dot-green";
+    subLine=c.enabled===false?"На паузе":`⏱ Следующая генерация ${_nextGenerationLabel(c)}`;
+  } else {
+    statusLabel="Публикация после подтверждения"; dotClass="status-dot-accent";
+    subLine=c.enabled===false?"На паузе":`⏱ Следующая генерация ${_nextGenerationLabel(c)}`;
+  }
+
+  const countdownAttr=(!c.auto_publish && c.approval_deadline)
+    ? ` data-approval-countdown="${new Date(c.approval_deadline).getTime()}"` : "";
+  const sublineHtml=countdownAttr
+    ? `<div class="status-subline"${countdownAttr}>⏱ считаем…</div>`
+    : `<div class="status-subline">${esc(subLine)}</div>`;
+
+  const preview=c.next_post_preview
+    ? `<div class="chan-preview">${esc(c.next_post_preview)}</div>`
+    : `<div class="chan-preview chan-preview-empty">Очередь пуста — посты скоро появятся</div>`;
+
+  return `<div class="chan-card" onclick="go('channel',${c.id})">
+    <div class="chan-card-top">
+      <div class="tg-ava">${initial}</div>
+      <div style="min-width:0">
+        <h3>${esc(c.title)}</h3>
+        <div class="chan-handle">${handle}</div>
+      </div>
+    </div>
+    <div class="status-line"><span class="status-dot ${dotClass}"></span>${statusLabel}</div>
+    ${sublineHtml}
+    ${preview}
+    <div class="chan-foot"><span>Опубликовано: ${c.published_count}</span><span>В очереди: ${c.queue_count}</span></div>
+  </div>`;
 }
 
 // ONBOARDING — переменные используются старой полной формой (renderNewChannel),
@@ -634,7 +721,7 @@ function renderNewChannelSettings(){
 
     <div class="card mt">
       <div class="toggle-row">
-        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если выключено — каждый пост ждёт вашего подтверждения перед публикацией.</small></div>
+        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала приходит вам в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать» и публикуется сам через ${App.cfg?.soft_control_minutes||30} мин, если не отреагируете.</small></div>
         <label class="switch"><input type="checkbox" id="ncs_auto"><span class="slider"></span></label>
       </div>
     </div>
@@ -852,6 +939,7 @@ async function _qsGenerateImpl(about){
 }
 
 function renderFirstPostResult(channelId, post, about){
+  tgHaptic("success"); // первый сгенерированный пост — эмоциональный пик онбординга
   App._qsAbout = about || App._qsAbout || ""; // помним тему для перегенерации
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <div class="page-head" style="text-align:center;margin-top:16px">
@@ -1008,7 +1096,8 @@ async function renderConnectChannel(){
     <div class="hint" style="margin-top:14px;line-height:1.7">
       1. Открой канал → Управление → Администраторы<br>
       2. Добавь <b>@${esc(botUsername)}</b><br>
-      3. Включи право «Публиковать сообщения»
+      3. Включи право «Публиковать сообщения»<br>
+      <a href="/how-to" target="_blank" rel="noopener">Подробная инструкция с картинками →</a>
     </div>
 
     <label class="field mt"><span class="field-label">@username канала или ссылка t.me/</span>
@@ -1591,6 +1680,10 @@ async function renderChannel(){
   catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");return go("dashboard");}
   if(!$("app")) return; // DOM ещё не готов — прерываем
   try{c.daily_times=JSON.parse(c.daily_times||"[]");}catch(_){c.daily_times=[];}
+  // Сбрасываем вид очереди (список/календарь) при переходе на другой канал --
+  // иначе выбранный день/месяц календаря одного канала подставлялся бы под
+  // совсем другой канал.
+  if(App._chan && App._chan.id!==c.id){_queueViewMode="list";_calMonth=null;_calSelectedDate=null;}
   App._chan=c;
   const notConnected=!c.tg_chat?`<div style="background:var(--accent-soft);border:1px solid #e8d5bb;border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;color:var(--accent-dark)">
     📡 Канал не подключён к Telegram.
@@ -1804,6 +1897,31 @@ function startNearestCountdown(){
   },1000);
 }
 
+// Живой countdown для карточек каналов на дашборде ("публикация после
+// подтверждения" — сколько осталось до автопубликации). В отличие от
+// startNearestCountdown (очередь внутри канала, только ближайший пост),
+// здесь каналов обычно немного и у каждого свой независимый таймер —
+// тикаем все сразу одним интервалом.
+let _dashCountdownTimer=null;
+function startDashboardCountdowns(){
+  if(_dashCountdownTimer){clearInterval(_dashCountdownTimer);_dashCountdownTimer=null;}
+  if(!document.querySelector("[data-approval-countdown]")) return;
+  const tick=()=>{
+    const els=document.querySelectorAll("[data-approval-countdown]");
+    if(!els.length){clearInterval(_dashCountdownTimer);_dashCountdownTimer=null;return;}
+    els.forEach(el=>{
+      const targetMs=parseInt(el.dataset.approvalCountdown||"0",10);
+      if(!targetMs) return;
+      const diff=targetMs-Date.now();
+      if(diff<=0){el.textContent="⏱ публикуется…";return;}
+      const m=Math.floor(diff/60000),sec=Math.floor((diff%60000)/1000);
+      el.textContent=`⏱ через ${m}:${String(sec).padStart(2,"0")}, если не подтвердите`;
+    });
+  };
+  tick();
+  _dashCountdownTimer=setInterval(tick,1000);
+}
+
 function togglePostMenu(postId){
   // Закрываем все остальные открытые меню перед открытием текущего.
   document.querySelectorAll(".post-menu").forEach(el=>{
@@ -1822,11 +1940,25 @@ document.addEventListener("click",e=>{
   }
 });
 
+let _queueViewMode="list"; // "list" | "calendar" -- сбрасывается на "list" при каждом заходе на новый канал (см. renderChannel)
+
 async function renderQueue(){
   $("tabbody").innerHTML=`<div id="postList"><div class="text-faint" style="padding:20px">Загрузка…</div></div>`;
   let posts=[];
   try{posts=await api("GET","/channels/"+App._chan.id+"/posts");}catch(e){}
+  App._queuePosts=posts; // календарь и переключение вида работают без повторного запроса
 
+  $("tabbody").innerHTML=`<div id="postList"></div>`;
+  renderQueueBody();
+}
+
+function setQueueViewMode(mode){
+  _queueViewMode=mode;
+  renderQueueBody();
+}
+
+function renderQueueBody(){
+  const posts=App._queuePosts||[];
   const pending=posts.filter(p=>p.status==="pending"||p.status==="onboarding"||p.status==="scheduled");
   const history=posts.filter(p=>p.status==="published"||p.status==="rejected");
   const c=App._chan;
@@ -1837,7 +1969,7 @@ async function renderQueue(){
   const autoPublishInfo = c.auto_publish
     ? `<div class="card" style="background:var(--blue-bg);border:none;margin-bottom:14px;padding:14px 16px">
         <div style="font-size:13px;color:var(--blue);font-weight:600">Автоматическая публикация</div>
-        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Посты будут выходить по расписанию каждые ${_intervalLabel(c.interval_hours||12)}.</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Посты будут выходить по расписанию ${_intervalLabel(c.interval_hours||12)}.</div>
         <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--blue)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Изменить</button>
       </div>`
     : `<div class="card" style="background:var(--accent-soft);border:none;margin-bottom:14px;padding:14px 16px">
@@ -1846,7 +1978,19 @@ async function renderQueue(){
         <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--accent-dark)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Открыть настройки</button>
       </div>`;
 
-  let html=autoPublishInfo;
+  const viewToggle=`<div style="display:flex;gap:8px;margin-bottom:14px">
+    <button class="btn-sm ${_queueViewMode==="list"?"btn":"btn-outline"}" onclick="setQueueViewMode('list')">📋 Список</button>
+    <button class="btn-sm ${_queueViewMode==="calendar"?"btn":"btn-outline"}" onclick="setQueueViewMode('calendar')">🗓 Календарь</button>
+  </div>`;
+
+  let html=autoPublishInfo+viewToggle;
+
+  if(_queueViewMode==="calendar"){
+    html+=renderQueueCalendar(posts);
+    $("postList").innerHTML=html;
+    return;
+  }
+
   if(!pending.length){
     const paused = c && !c.enabled;
     html+=paused
@@ -1878,6 +2022,93 @@ async function renderQueue(){
   startNearestCountdown();
 }
 
+// ── КАЛЕНДАРЬ (task item: вид очереди по датам) ────────────────────────
+// Показывает посты, у которых есть конкретная дата: опубликованные
+// (published_at) и явно запланированные (scheduled_at, статус "scheduled").
+// Посты в режиме "публикация после подтверждения" (pending) намеренно не
+// показываются на календаре -- у них ещё нет фиксированной даты публикации,
+// она зависит от того, когда/подтвердит ли пользователь пост (см. очередь
+// в виде списка для них).
+let _calMonth=null; // Date (1-е число месяца, локальное время) -- null = текущий месяц при первом открытии
+let _calSelectedDate=null; // "YYYY-MM-DD" -- какой день сейчас раскрыт под календарём
+
+function _dateKey(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function changeCalMonth(delta){
+  const m=_calMonth||new Date();
+  _calMonth=new Date(m.getFullYear(), m.getMonth()+delta, 1);
+  _calSelectedDate=null;
+  renderQueueBody();
+}
+
+function selectCalDate(key){
+  _calSelectedDate=(_calSelectedDate===key)?null:key;
+  renderQueueBody();
+}
+
+function renderQueueCalendar(posts){
+  const monthDate=_calMonth||new Date();
+  const year=monthDate.getFullYear(), month=monthDate.getMonth();
+
+  const byDate={};
+  posts.forEach(p=>{
+    let d=null, kind=null;
+    if(p.status==="published" && p.published_at){ d=new Date(p.published_at+"Z"); kind="published"; }
+    else if(p.status==="scheduled" && p.scheduled_at){ d=new Date(p.scheduled_at+"Z"); kind="scheduled"; }
+    if(!d) return;
+    const key=_dateKey(d);
+    (byDate[key]=byDate[key]||[]).push({...p, _calKind:kind, _calTime:d});
+  });
+
+  const firstOfMonth=new Date(year,month,1);
+  const daysInMonth=new Date(year,month+1,0).getDate();
+  // Понедельник = 0 (российская неделя)
+  const leadingBlanks=(firstOfMonth.getDay()+6)%7;
+  const todayKey=_dateKey(new Date());
+
+  let cells="";
+  for(let i=0;i<leadingBlanks;i++) cells+=`<div class="cal-cell cal-cell-empty"></div>`;
+  for(let day=1;day<=daysInMonth;day++){
+    const key=`${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+    const items=(byDate[key]||[]).sort((a,b)=>a._calTime-b._calTime);
+    const isToday=key===todayKey;
+    const isSelected=key===_calSelectedDate;
+    const dots=items.slice(0,3).map(it=>`<span class="cal-dot cal-dot-${it._calKind}"></span>`).join("");
+    const more=items.length>3?`<span class="cal-more">+${items.length-3}</span>`:"";
+    cells+=`<div class="cal-cell${isToday?" cal-cell-today":""}${isSelected?" cal-cell-selected":""}${items.length?" cal-cell-has":""}"
+      ${items.length?`onclick="selectCalDate('${key}')"`:""}>
+      <div class="cal-daynum">${day}</div>
+      ${items.length?`<div class="cal-dots">${dots}${more}</div>`:""}
+    </div>`;
+  }
+
+  const monthLabel=monthDate.toLocaleDateString("ru-RU",{month:"long",year:"numeric"});
+  const weekHead=["Пн","Вт","Ср","Чт","Пт","Сб","Вс"].map(d=>`<div class="cal-cell cal-cell-head">${d}</div>`).join("");
+
+  let selectedBlock="";
+  if(_calSelectedDate && byDate[_calSelectedDate]){
+    const dLabel=new Date(_calSelectedDate+"T00:00:00").toLocaleDateString("ru-RU",{day:"numeric",month:"long"});
+    selectedBlock=`<div style="margin-top:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <h3 style="margin:0">${dLabel}</h3>
+        <button class="btn-ghost btn-sm" onclick="selectCalDate('${_calSelectedDate}')">✕ Закрыть</button>
+      </div>
+      ${byDate[_calSelectedDate].map(p=>renderPostCard(p, p.scheduled_at?new Date(p.scheduled_at+"Z").getTime():null, App._chan.enabled)).join("")}
+    </div>`;
+  }
+
+  return `<div class="cal-nav">
+    <button class="btn-ghost btn-sm" onclick="changeCalMonth(-1)">‹</button>
+    <div class="cal-month-label">${monthLabel}</div>
+    <button class="btn-ghost btn-sm" onclick="changeCalMonth(1)">›</button>
+  </div>
+  <div class="cal-grid">${weekHead}${cells}</div>
+  <div class="cal-legend"><span><span class="cal-dot cal-dot-published"></span> Опубликован</span><span><span class="cal-dot cal-dot-scheduled"></span> Запланирован</span></div>
+  ${selectedBlock}`;
+}
+
 
 // SETTINGS
 function renderSettings(){
@@ -1899,14 +2130,14 @@ function renderSettings(){
                  <input id="f_chat" value="${esc(c.tg_chat)}" placeholder="@my_channel" style="flex:1">
                  <button class="btn-outline btn-sm" onclick="verifyChannel()" id="verBtn" style="white-space:nowrap">Проверить</button>
                </div>
-               <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации.</div>
+               <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации. <a href="/how-to" target="_blank" rel="noopener">Как это сделать →</a></div>
                <div id="verMsg" style="font-size:13px;margin-top:6px"></div>
              </div>`
           : `<div class="row" style="gap:8px">
                <input id="f_chat" value="${esc(c.tg_chat)}" placeholder="@my_channel" style="flex:1">
                <button class="btn-outline btn-sm" onclick="verifyChannel()" id="verBtn" style="white-space:nowrap">Проверить</button>
              </div>
-             <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации.</div>
+             <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации. <a href="/how-to" target="_blank" rel="noopener">Как это сделать →</a></div>
              <div id="verMsg" style="font-size:13px;margin-top:6px"></div>`
         }
       </label>
@@ -2367,8 +2598,7 @@ async function renderBilling(){
     </div>
     <div style="text-align:center;margin-top:16px;padding-bottom:8px">
       <button class="btn-danger btn-sm" onclick="deleteAccount()" style="font-size:12px;opacity:.6">Удалить аккаунт</button>
-    </div>
-    ${renderFooter()}</div>`;
+    </div></div>`;
   try{
     const me=await api("GET","/me");const code=me.ref_code||"";
     $("ref_block").innerHTML=`
@@ -2524,16 +2754,19 @@ async function publishPost(id){
   if(timedOut){
     if(btn) btn.innerHTML='<span class="spinner"></span> Проверяем статус…';
     const {confirmed}=await pollPostStatus(id);
-    if(confirmed){toast("Опубликовано ✓","ok");renderQueue();return;}
+    if(confirmed){tgHaptic("success");toast("Опубликовано ✓","ok");renderQueue();return;}
+    tgHaptic("error");
     toast("Не удалось подтвердить публикацию. Проверьте канал или попробуйте ещё раз.","err");
     if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
     return;
   }
   if(error){
+    tgHaptic("error");
     toast((error&&error.message)||"Не удалось опубликовать пост. Попробуйте ещё раз.","err");
     if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
     return;
   }
+  tgHaptic("success");
   toast("Опубликовано ✓","ok");renderQueue();
 }
 async function rejectPost(id){
@@ -2594,7 +2827,7 @@ function pickChannelType(type){
 function initCookieBanner(){
   if(localStorage.getItem("cookie_ok")) return;
   const b=document.createElement("div");
-  b.style.cssText="position:fixed;bottom:0;left:0;right:0;background:#1a1815;color:#e9e6df;font-size:13px;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;z-index:9999;";
+  b.style.cssText="position:fixed;bottom:0;left:0;right:0;background:#171b20;color:#e4e8ec;font-size:13px;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;z-index:9999;";
   b.innerHTML=`<span>Мы используем cookies. <a href="/legal/privacy" target="_blank" style="color:#d8b15e">Подробнее</a></span>
     <button onclick="this.parentElement.remove();localStorage.setItem('cookie_ok','1')"
       style="background:#d8b15e;color:#1a1404;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:500">Понятно</button>`;
@@ -2671,9 +2904,23 @@ function initTelegram(){
   try{
     if(typeof tg.ready==='function') tg.ready();
     if(typeof tg.expand==='function') tg.expand();           // на весь экран
-    if(typeof tg.setHeaderColor==='function') tg.setHeaderColor("#f5f1ea");
-    if(typeof tg.setBackgroundColor==='function') tg.setBackgroundColor("#f5f1ea");
+    // Цвет — тот же --bg что и у веб-версии (см. static/styles.css :root),
+    // не старый кремовый: перекрашен вместе с общей палитрой сайта.
+    if(typeof tg.setHeaderColor==='function') tg.setHeaderColor("#eaf1f8");
+    if(typeof tg.setBackgroundColor==='function') tg.setBackgroundColor("#eaf1f8");
     if(typeof tg.disableVerticalSwipes==='function') tg.disableVerticalSwipes(); // не закрывать свайпом случайно
+    if(typeof tg.enableClosingConfirmation==='function') tg.enableClosingConfirmation(); // не закрывать случайным свайпом/кнопкой назад поверх открытого экрана
+  }catch(_){}
+}
+
+// Тактильный отклик на ключевых действиях (Mini App onlу — на обычном
+// вебе tg отсутствует, вызов просто не происходит).
+function tgHaptic(kind){
+  try{
+    const h=window.Telegram?.WebApp?.HapticFeedback;
+    if(!h) return;
+    if(kind==="success"||kind==="error"||kind==="warning") h.notificationOccurred(kind);
+    else h.impactOccurred(kind||"medium");
   }catch(_){}
 }
 

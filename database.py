@@ -117,6 +117,14 @@ class PostApproval(SQLModel, table=True):
     status: waiting (таймер идёт) | awaiting_edit (ждём новый текст
     ответным сообщением) | done (решено -- опубликован/отклонён/устарел).
 
+    final_warning_sent: когда deadline проходит, tick() не публикует пост
+    в ту же секунду -- сначала присылает предупреждение ("публикую через
+    минуту") и сдвигает deadline на SOFT_CONTROL_FINAL_GRACE_SECONDS
+    вперёд, выставляя этот флаг. Реальная публикация происходит только
+    когда deadline снова проходит И флаг уже True -- даёт человеку
+    последний шанс успеть нажать "Отклонить"/"Редактировать", вместо
+    мгновенной необратимой публикации в канал.
+
     Новая отдельная таблица -- та же безопасная схема, что LandingEvent/
     TrafficAttribution/IdempotencyKey: создаётся через create_all(), без
     ALTER TABLE на Post/Channel.
@@ -128,6 +136,29 @@ class PostApproval(SQLModel, table=True):
     review_message_id: Optional[int] = None
     deadline: datetime
     status: str = "waiting"
+    final_warning_sent: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class TelegramIdentity(SQLModel, table=True):
+    """
+    Связывает Telegram-пользователя (id из initData Telegram Mini App) с
+    аккаунтом АвтоПост -- позволяет войти в Mini App без email/пароля,
+    одним нажатием ("Продолжить как <имя>"), см. POST /api/auth/telegram_miniapp.
+
+    tg_user_id -- это тот же числовой id, что Telegram использует как
+    chat_id личного чата с ботом, поэтому при автосоздании аккаунта он же
+    пишется в User.tg_chat_id -- уведомления от бота-публикатора начинают
+    работать сразу, без отдельного шага "подключить Telegram" в настройках.
+
+    Новая отдельная таблица -- та же безопасная схема, что PostApproval/
+    LandingEvent/TrafficAttribution: создаётся через create_all(), без
+    ALTER TABLE на User.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tg_user_id: int = Field(index=True, unique=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    tg_username: str = ""
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

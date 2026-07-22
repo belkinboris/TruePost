@@ -26,7 +26,7 @@ import tasks
 from database import (
     init_db, session,
     User, Channel, Source, Post, Payment, Referral, LandingEvent, IdempotencyKey, ProductEvent,
-    TrafficAttribution,
+    TrafficAttribution, PostApproval, TelegramIdentity,
 )
 from attribution import classify_utm
 from pydantic import BaseModel as _BaseModel
@@ -49,7 +49,7 @@ class _MePatch(_BaseModel):
     tg_chat_id: _Opt[int] = None
 
 from schemas import (
-    AuthIn, ChannelIn, ChannelPatch, SourceIn,
+    AuthIn, TelegramMiniAppAuthIn, ChannelIn, ChannelPatch, SourceIn,
     AnalyzeIn, AnalyzeStyleOnly, GenerateFormatIn, PostIn,
     PostPatch, ScheduleIn, BuyIn,
 )
@@ -156,6 +156,55 @@ def _gen_ref_code() -> str:
     return "".join(secrets.choice(chars) for _ in range(8))
 
 
+def _link_registration_attribution(s, user: User, lp_session: str, utm_source: str, utm_medium: str, utm_campaign: str, utm_content: str):
+    """CTA/Journey Diagnostics -- общая логика для /api/register и
+    /api/auth/telegram_miniapp: пишет LandingEvent("register_success") и
+    привязывает/создаёт TrafficAttribution к новому пользователю. Не
+    блокирует регистрацию при сбое (read-only диагностика, см. LandingEvent)."""
+    if lp_session:
+        try:
+            s.add(LandingEvent(
+                session_id=lp_session[:64],
+                event="register_success",
+                user_id=user.id,
+                utm_source=(utm_source or "")[:50],
+                utm_medium=(utm_medium or "")[:50],
+                utm_campaign=(utm_campaign or "")[:100],
+            ))
+            s.commit()
+        except Exception:
+            pass
+
+    try:
+        linked = False
+        if lp_session:
+            existing = s.exec(
+                select(TrafficAttribution).where(
+                    TrafficAttribution.landing_session_id == lp_session[:64],
+                    TrafficAttribution.user_id == None,  # noqa: E711
+                )
+            ).first()
+            if existing:
+                existing.user_id = user.id
+                s.add(existing)
+                s.commit()
+                linked = True
+
+        if not linked and utm_source:
+            src, med = classify_utm(utm_source, utm_medium)
+            s.add(TrafficAttribution(
+                user_id=user.id,
+                landing_session_id=(lp_session[:64] if lp_session else None),
+                source=src,
+                medium=med,
+                campaign=(utm_campaign or "")[:100],
+                content=(utm_content or "")[:100],
+            ))
+            s.commit()
+    except Exception:
+        pass
+
+
 def _own_channel(s, channel_id: int, user: User) -> Channel:
     ch = s.get(Channel, channel_id)
     if not ch or ch.user_id != user.id:
@@ -214,62 +263,9 @@ def register(data: AuthIn):
         s.commit()
         s.refresh(user)
 
-        # CTA/Journey Diagnostics: связываем регистрацию с сессией лендинга,
-        # если она была передана. User не трогаем -- пишем только в LandingEvent
-        # (новая таблица, безопасно создаётся через create_all, без ALTER TABLE
-        # на существующих таблицах). Не блокирует регистрацию при сбое.
-        if data.lp_session:
-            try:
-                s.add(LandingEvent(
-                    session_id=data.lp_session[:64],
-                    event="register_success",
-                    user_id=user.id,
-                    utm_source=(data.utm_source or "")[:50],
-                    utm_medium=(data.utm_medium or "")[:50],
-                    utm_campaign=(data.utm_campaign or "")[:100],
-                ))
-                s.commit()
-            except Exception:
-                pass
-
-        # Attribution: источник трафика для разделения Telegram Ads / Yandex
-        # Direct / organic перед запуском Telegram Ads. Не блокирует
-        # регистрацию при сбое -- та же безопасная схема что LandingEvent выше.
-        try:
-            linked = False
-            if data.lp_session:
-                # Сначала пробуем привязать уже существующую запись по той же
-                # сессии (могла быть создана раньше: на /api/landing-event
-                # landing_view с UTM, либо ботом при /start tgads_*). Так не
-                # плодим дублирующие TrafficAttribution на одну сессию.
-                existing = s.exec(
-                    select(TrafficAttribution).where(
-                        TrafficAttribution.landing_session_id == data.lp_session[:64],
-                        TrafficAttribution.user_id == None,  # noqa: E711
-                    )
-                ).first()
-                if existing:
-                    existing.user_id = user.id
-                    s.add(existing)
-                    s.commit()
-                    linked = True
-
-            if not linked and data.utm_source:
-                # Запасной путь: UTM пришли прямо с формы регистрации, но
-                # записи в TrafficAttribution по сессии ещё не было (например
-                # landing_view не успел отправиться, или session_id не дошёл).
-                src, med = classify_utm(data.utm_source, data.utm_medium)
-                s.add(TrafficAttribution(
-                    user_id=user.id,
-                    landing_session_id=(data.lp_session[:64] if data.lp_session else None),
-                    source=src,
-                    medium=med,
-                    campaign=(data.utm_campaign or "")[:100],
-                    content=(data.utm_content or "")[:100],
-                ))
-                s.commit()
-        except Exception:
-            pass
+        _link_registration_attribution(
+            s, user, data.lp_session, data.utm_source, data.utm_medium, data.utm_campaign, data.utm_content
+        )
 
         # Начисляем бонус рефереру
         if referrer:
@@ -317,6 +313,7 @@ _ALLOWED_LANDING_EVENTS = {
     "first_post_generated",
     "channel_connected",
     "first_post_published",
+    "howto_view",
 }
 
 
@@ -439,6 +436,88 @@ def login(data: AuthIn):
         return {"token": security.create_token(user.id), "email": user.email}
 
 
+@app.post("/api/auth/telegram_miniapp")
+def auth_telegram_miniapp(data: TelegramMiniAppAuthIn):
+    """
+    Вход/автосоздание аккаунта по initData Telegram Mini App -- без
+    email/пароля. Фронт вызывает это только с ЯВНОГО нажатия кнопки
+    "Продолжить как <имя>" (см. renderAuth в static/app.part02.js), не
+    молча при загрузке -- у пользователя с уже существующим email-аккаунтом
+    остаётся видимый путь "Войти по email" рядом.
+
+    initData -- одноразовая сессия WebApp, но повторные вызовы с ней же
+    безопасны (verify_telegram_init_data не одноразовая, только по времени) --
+    открытие Mini App заново всегда даёт свежую initData от Telegram.
+    """
+    if not config.MAIN_BOT_TOKEN:
+        raise HTTPException(503, "Вход через Telegram сейчас недоступен")
+
+    parsed = security.verify_telegram_init_data(data.init_data, config.MAIN_BOT_TOKEN)
+    if not parsed:
+        raise HTTPException(401, "Не удалось подтвердить данные Telegram")
+
+    tg_user = parsed.get("user") or {}
+    tg_user_id = tg_user.get("id")
+    if not isinstance(tg_user_id, int):
+        raise HTTPException(401, "Не удалось определить пользователя Telegram")
+    tg_username = (tg_user.get("username") or "")[:64]
+
+    with session() as s:
+        identity = s.exec(select(TelegramIdentity).where(TelegramIdentity.tg_user_id == tg_user_id)).first()
+
+        if identity:
+            user = s.get(User, identity.user_id)
+            if not user:
+                raise HTTPException(404, "Аккаунт не найден")
+            if tg_username and user.tg_username != tg_username:
+                user.tg_username = tg_username
+                s.add(user)
+                s.commit()
+            return {"token": security.create_token(user.id), "email": user.email, "is_new": False}
+
+        # Новый Telegram-пользователь -- создаём аккаунт автоматически.
+        # tg_chat_id = tg_user_id: для приватного чата с ботом это одно и то
+        # же число, поэтому уведомления от бота-публикатора начинают
+        # работать сразу, без отдельного шага подключения в настройках.
+        referrer = None
+        ref_code = (data.ref_code or "").strip().upper()
+        if ref_code:
+            referrer = s.exec(select(User).where(User.ref_code == ref_code)).first()
+
+        user = User(
+            email=f"tg{tg_user_id}@telegram.local",
+            password_hash=security.hash_password(secrets.token_hex(32)),
+            token_balance=config.WELCOME_TOKENS,
+            ref_code=_gen_ref_code(),
+            referred_by=referrer.id if referrer else None,
+            tg_chat_id=tg_user_id,
+            tg_username=tg_username,
+        )
+        s.add(user)
+        s.commit()
+        s.refresh(user)
+
+        s.add(TelegramIdentity(tg_user_id=tg_user_id, user_id=user.id, tg_username=tg_username))
+        s.commit()
+
+        _link_registration_attribution(
+            s, user, data.lp_session, data.utm_source, data.utm_medium, data.utm_campaign, data.utm_content
+        )
+
+        if referrer:
+            referrer_obj = s.get(User, referrer.id)
+            if referrer_obj:
+                referrer_obj.token_balance += config.REFERRAL_BONUS_TOKENS
+                s.add(Referral(referrer_id=referrer.id, referred_id=user.id, bonus_tokens=config.REFERRAL_BONUS_TOKENS))
+                user.token_balance += config.REFERRAL_BONUS_TOKENS
+                s.add(referrer_obj)
+                s.add(user)
+                s.commit()
+                s.refresh(user)
+
+        return {"token": security.create_token(user.id), "email": user.email, "is_new": True}
+
+
 @app.get("/api/me")
 def me(user: User = Depends(current_user)):
     with session() as s:
@@ -459,12 +538,35 @@ def me(user: User = Depends(current_user)):
 
 # ── Каналы ────────────────────────────────────────────────────
 
-def _channel_dict(ch: Channel) -> dict:
+def _channel_dict(s, ch: Channel) -> dict:
     d = ch.model_dump()
     try:
         d["daily_times"] = json.loads(ch.daily_times or "[]")
     except Exception:
         d["daily_times"] = []
+
+    # Данные для карточки канала в кабинете: что дальше в очереди и когда
+    # опубликуется -- без этого карточка показывает только настройки, а не
+    # реальное состояние (см. редизайн кабинета).
+    next_post = s.exec(
+        select(Post).where(Post.channel_id == ch.id, Post.status == "pending")
+        .order_by(Post.created_at)
+    ).first()
+    d["next_post_preview"] = generator._clean_post(next_post.text)[:220] if next_post else None
+    d["queue_count"] = len(s.exec(
+        select(Post).where(Post.channel_id == ch.id, Post.status.in_(["pending", "scheduled"]))
+    ).all())
+    d["published_count"] = len(s.exec(
+        select(Post).where(Post.channel_id == ch.id, Post.status == "published")
+    ).all())
+
+    d["approval_deadline"] = None
+    if next_post:
+        approval = s.exec(
+            select(PostApproval).where(PostApproval.post_id == next_post.id, PostApproval.status == "waiting")
+        ).first()
+        if approval:
+            d["approval_deadline"] = approval.deadline.isoformat() + "Z"
     return d
 
 
@@ -472,7 +574,7 @@ def _channel_dict(ch: Channel) -> dict:
 def list_channels(user: User = Depends(current_user)):
     with session() as s:
         chans = s.exec(select(Channel).where(Channel.user_id == user.id)).all()
-        return [_channel_dict(c) for c in chans]
+        return [_channel_dict(s, c) for c in chans]
 
 
 class _TopicValidateIn(_BaseModel):
@@ -542,7 +644,7 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
                 existing_channel = s.get(Channel, existing_key.channel_id)
                 if existing_channel and existing_channel.about == data.about:
                     logger.info(f"create_channel: повторный client_request_id «{data.client_request_id}», about совпадает, возвращаю существующий канал {existing_channel.id}")
-                    return _channel_dict(existing_channel)
+                    return _channel_dict(s, existing_channel)
                 elif existing_channel:
                     logger.warning(
                         f"create_channel: client_request_id «{data.client_request_id}» совпал, но about отличается "
@@ -595,13 +697,13 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
             s.commit()
 
         logger.info(f"[create_channel] создан channel_id={ch.id} title=«{ch.title}» about=«{ch.about}» client_request_id=«{data.client_request_id}»")
-        return _channel_dict(ch)
+        return _channel_dict(s, ch)
 
 
 @app.get("/api/channels/{channel_id}")
 def get_channel(channel_id: int, user: User = Depends(current_user)):
     with session() as s:
-        return _channel_dict(_own_channel(s, channel_id, user))
+        return _channel_dict(s, _own_channel(s, channel_id, user))
 
 
 @app.patch("/api/channels/{channel_id}")
@@ -626,7 +728,7 @@ def patch_channel(channel_id: int, data: ChannelPatch, user: User = Depends(curr
         s.add(ch)
         s.commit()
         s.refresh(ch)
-        return _channel_dict(ch)
+        return _channel_dict(s, ch)
 
 
 @app.delete("/api/channels/{channel_id}")
@@ -1467,6 +1569,10 @@ def legal_refund():
 @app.get("/landing")
 def landing():
     return FileResponse("static/landing.html")
+
+@app.get("/how-to")
+def how_to():
+    return FileResponse("static/how-to.html")
 
 @app.get("/robots.txt")
 def robots_txt():

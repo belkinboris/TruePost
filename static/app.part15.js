@@ -31,16 +31,19 @@ async function publishPost(id){
   if(timedOut){
     if(btn) btn.innerHTML='<span class="spinner"></span> Проверяем статус…';
     const {confirmed}=await pollPostStatus(id);
-    if(confirmed){toast("Опубликовано ✓","ok");renderQueue();return;}
+    if(confirmed){tgHaptic("success");toast("Опубликовано ✓","ok");renderQueue();return;}
+    tgHaptic("error");
     toast("Не удалось подтвердить публикацию. Проверьте канал или попробуйте ещё раз.","err");
     if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
     return;
   }
   if(error){
+    tgHaptic("error");
     toast((error&&error.message)||"Не удалось опубликовать пост. Попробуйте ещё раз.","err");
     if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
     return;
   }
+  tgHaptic("success");
   toast("Опубликовано ✓","ok");renderQueue();
 }
 async function rejectPost(id){
@@ -101,7 +104,7 @@ function pickChannelType(type){
 function initCookieBanner(){
   if(localStorage.getItem("cookie_ok")) return;
   const b=document.createElement("div");
-  b.style.cssText="position:fixed;bottom:0;left:0;right:0;background:#1a1815;color:#e9e6df;font-size:13px;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;z-index:9999;";
+  b.style.cssText="position:fixed;bottom:0;left:0;right:0;background:#171b20;color:#e4e8ec;font-size:13px;padding:12px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;z-index:9999;";
   b.innerHTML=`<span>Мы используем cookies. <a href="/legal/privacy" target="_blank" style="color:#d8b15e">Подробнее</a></span>
     <button onclick="this.parentElement.remove();localStorage.setItem('cookie_ok','1')"
       style="background:#d8b15e;color:#1a1404;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:13px;font-weight:500">Понятно</button>`;
@@ -178,9 +181,23 @@ function initTelegram(){
   try{
     if(typeof tg.ready==='function') tg.ready();
     if(typeof tg.expand==='function') tg.expand();           // на весь экран
-    if(typeof tg.setHeaderColor==='function') tg.setHeaderColor("#f5f1ea");
-    if(typeof tg.setBackgroundColor==='function') tg.setBackgroundColor("#f5f1ea");
+    // Цвет — тот же --bg что и у веб-версии (см. static/styles.css :root),
+    // не старый кремовый: перекрашен вместе с общей палитрой сайта.
+    if(typeof tg.setHeaderColor==='function') tg.setHeaderColor("#eaf1f8");
+    if(typeof tg.setBackgroundColor==='function') tg.setBackgroundColor("#eaf1f8");
     if(typeof tg.disableVerticalSwipes==='function') tg.disableVerticalSwipes(); // не закрывать свайпом случайно
+    if(typeof tg.enableClosingConfirmation==='function') tg.enableClosingConfirmation(); // не закрывать случайным свайпом/кнопкой назад поверх открытого экрана
+  }catch(_){}
+}
+
+// Тактильный отклик на ключевых действиях (Mini App onlу — на обычном
+// вебе tg отсутствует, вызов просто не происходит).
+function tgHaptic(kind){
+  try{
+    const h=window.Telegram?.WebApp?.HapticFeedback;
+    if(!h) return;
+    if(kind==="success"||kind==="error"||kind==="warning") h.notificationOccurred(kind);
+    else h.impactOccurred(kind||"medium");
   }catch(_){}
 }
 

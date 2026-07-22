@@ -27,11 +27,66 @@ async function renderNewChannelRouter(){
 }
 
 // AUTH
+function _tgAuthInitData(){
+  try{ return window.Telegram?.WebApp?.initData || ""; }catch(_){ return ""; }
+}
+function _tgAuthFirstName(){
+  try{ return window.Telegram?.WebApp?.initDataUnsafe?.user?.first_name || "Telegram"; }catch(_){ return "Telegram"; }
+}
+function toggleTgEmailFallback(){
+  const c=$("email_auth_card");
+  if(c) c.style.display = c.style.display==="none" ? "" : "none";
+}
+async function tgContinueAuth(){
+  const initData=_tgAuthInitData();
+  if(!initData) return;
+  const btn=$("tgContinueBtn");
+  const originalLabel=btn?btn.innerHTML:"";
+  if(btn){btn.innerHTML='<span class="spinner"></span> Входим…';btn.disabled=true;}
+  const body={init_data:initData};
+  try{
+    const lpSession=localStorage.getItem("ap_lp_session");
+    if(lpSession){
+      body.lp_session=lpSession;
+      const utm=JSON.parse(localStorage.getItem("ap_lp_utm")||"{}");
+      if(utm.utm_source) body.utm_source=utm.utm_source;
+      if(utm.utm_medium) body.utm_medium=utm.utm_medium;
+      if(utm.utm_campaign) body.utm_campaign=utm.utm_campaign;
+      if(utm.utm_content) body.utm_content=utm.utm_content;
+    }
+  }catch(_){}
+  try{
+    const r=await api("POST","/auth/telegram_miniapp",body);
+    App.token=r.token;localStorage.setItem("ap_token",r.token);
+    trackGoal(r.is_new?"register_success":"login_success");
+    tgHaptic("success");
+    await boot();
+  }catch(e){
+    tgHaptic("error");
+    toast(e&&e.message?e.message:"Не удалось войти через Telegram","err");
+    if(btn){btn.innerHTML=originalLabel;btn.disabled=false;}
+  }
+}
+
 function renderAuth(mode="login"){
+  // Task item 4 (Mini App): если открыто внутри Telegram (initData
+  // присутствует) и токена ещё нет — предлагаем вход в одно нажатие вместо
+  // формы email/пароль. Форма email остаётся доступна ссылкой ниже — не
+  // теряем пользователей, у которых уже есть аккаунт с другого устройства/
+  // браузера (initData там недоступна, а localStorage Telegram WebView не
+  // делится с обычным браузером).
+  const tgInitData=_tgAuthInitData();
   $("app").innerHTML=`<div class="auth-wrap"><div class="auth-box">
     <div class="auth-logo">Авто<span>пост</span></div>
     <div class="auth-sub">ИИ ведёт твой Telegram-канал на автопилоте</div>
-    <div class="card">
+    ${tgInitData?`<div class="card" style="text-align:center">
+      <div style="font-size:14px;color:var(--text-dim);margin-bottom:14px">Вы открыли АвтоПост в Telegram</div>
+      <button class="btn" style="width:100%;justify-content:center;padding:14px" id="tgContinueBtn" onclick="tgContinueAuth()">Продолжить как ${esc(_tgAuthFirstName())}</button>
+      <div style="margin-top:12px">
+        <button class="btn-ghost btn-sm" style="color:var(--text-faint)" onclick="toggleTgEmailFallback()">Уже есть аккаунт с email? →</button>
+      </div>
+    </div>`:""}
+    <div class="card" id="email_auth_card" style="${tgInitData?"display:none;margin-top:14px":""}">
       <label class="field"><span class="field-label">Email</span>
         <input id="em" type="email" placeholder="you@mail.ru" autocomplete="username"></label>
       <label class="field mt"><span class="field-label">Пароль</span>
@@ -129,14 +184,6 @@ function topbar(backView,backLabel){
       </div>
       <button class="btn-ghost btn-sm" onclick="logout()">Выйти</button>
     </div></div>${lowBanner}${back}`;
-}
-
-function renderFooter(){
-  return `<div style="margin-top:auto;text-align:center;padding:48px 16px 24px;font-size:12px;color:var(--text-faint);line-height:1.8">
-    ИП Белкин Б.Б. · ИНН 771387918350 · ОГРНИП 324774600432188<br>
-    <a href="/legal/offer" target="_blank" style="color:var(--text-faint)">Оферта</a> &nbsp;·&nbsp;
-    <a href="/legal/privacy" target="_blank" style="color:var(--text-faint)">Конфиденциальность</a> &nbsp;·&nbsp;
-    <a href="/legal/refund" target="_blank" style="color:var(--text-faint)">Возврат</a></div>`;
 }
 
 // DASHBOARD

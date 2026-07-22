@@ -94,7 +94,8 @@ async function renderConnectChannel(){
     <div class="hint" style="margin-top:14px;line-height:1.7">
       1. Открой канал → Управление → Администраторы<br>
       2. Добавь <b>@${esc(botUsername)}</b><br>
-      3. Включи право «Публиковать сообщения»
+      3. Включи право «Публиковать сообщения»<br>
+      <a href="/how-to" target="_blank" rel="noopener">Подробная инструкция с картинками →</a>
     </div>
 
     <label class="field mt"><span class="field-label">@username канала или ссылка t.me/</span>

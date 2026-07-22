@@ -356,6 +356,17 @@ def cancel_pending_approval(post_id: int):
             s.add(approval); s.commit()
 
 
+def _resume_deadline(current_deadline: datetime) -> datetime:
+    """
+    При возврате в статус "waiting" (после правки текста или отмены
+    редактирования) гарантирует минимум SOFT_CONTROL_FINAL_GRACE_SECONDS
+    до следующей возможной публикации -- даже если исходный дедлайн уже
+    прошёл, пост не публикуется в ту же секунду, что и правка.
+    """
+    floor = datetime.utcnow() + timedelta(seconds=config.SOFT_CONTROL_FINAL_GRACE_SECONDS)
+    return max(current_deadline, floor)
+
+
 def _approval_keyboard(post_id: int) -> list:
     return [
         [{"text": "✅ Опубликовать сейчас", "callback_data": f"appub:{post_id}"}],
@@ -405,11 +416,36 @@ async def _send_approval_card(post_id: int, channel_id: int, chat_id: int, chann
 
 
 async def _auto_publish_after_timeout(approval_id: int, post_id: int, review_chat_id: int, review_message_id: Optional[int]):
-    """Вызывается из tick(), когда дедлайн подтверждения истёк без реакции."""
+    """
+    Вызывается из tick(), когда дедлайн подтверждения истёк без реакции.
+    Двухфазно: сначала предупреждение + короткий финальный буфер
+    (SOFT_CONTROL_FINAL_GRACE_SECONDS), и только потом реальная
+    публикация -- мгновенный тик не должен публиковать пост без ни
+    единого шанса передумать в последний момент.
+    """
     with session() as s:
         approval = s.get(PostApproval, approval_id)
         if not approval or approval.status != "waiting":
             return  # уже обработано (нажали кнопку) между выборкой и этим тиком
+
+        if not approval.final_warning_sent:
+            # Фаза 1: предупреждаем и даём ещё немного времени, не публикуем
+            approval.final_warning_sent = True
+            approval.deadline = datetime.utcnow() + timedelta(seconds=config.SOFT_CONTROL_FINAL_GRACE_SECONDS)
+            s.add(approval); s.commit()
+            if review_message_id:
+                try:
+                    await telegram_api.edit_message_text(
+                        review_chat_id, review_message_id,
+                        f"⏳ Время вышло — публикую примерно через {config.SOFT_CONTROL_FINAL_GRACE_SECONDS} сек. "
+                        f"Ещё можно нажать «Отклонить» или «Редактировать».",
+                        keyboard=_approval_keyboard(post_id),
+                    )
+                except Exception as e:
+                    logger.warning(f"approval timeout: не удалось отправить финальное предупреждение поста {post_id}: {e}")
+            return
+
+        # Фаза 2: буфер тоже прошёл — реальная публикация
         approval.status = "done"
         s.add(approval); s.commit()
 
@@ -510,7 +546,10 @@ async def _handle_approval_callback(cq: dict):
             return
         with session() as s:
             a = s.get(PostApproval, approval.id)
-            a.status = "waiting"; s.add(a); s.commit()
+            a.status = "waiting"
+            a.deadline = _resume_deadline(a.deadline)
+            a.final_warning_sent = False
+            s.add(a); s.commit()
             post = s.get(Post, post_id)
             channel = s.get(Channel, post.channel_id) if post else None
             post_text = post.text if post else ""
@@ -544,6 +583,8 @@ async def _handle_possible_edit_reply(chat_id: int, new_text: str):
             return
         post.text = cleaned
         approval.status = "waiting"
+        approval.deadline = _resume_deadline(approval.deadline)
+        approval.final_warning_sent = False
         channel = s.get(Channel, post.channel_id)
         s.add(post); s.add(approval); s.commit()
         post_id = post.id
