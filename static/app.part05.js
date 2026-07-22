@@ -131,6 +131,7 @@ async function _qsGenerateImpl(about){
 }
 
 function renderFirstPostResult(channelId, post, about){
+  tgHaptic("success"); // первый сгенерированный пост — эмоциональный пик онбординга
   App._qsAbout = about || App._qsAbout || ""; // помним тему для перегенерации
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <div class="page-head" style="text-align:center;margin-top:16px">

@@ -884,6 +884,7 @@ async function _qsGenerateImpl(about){
 }
 
 function renderFirstPostResult(channelId, post, about){
+  tgHaptic("success"); // первый сгенерированный пост — эмоциональный пик онбординга
   App._qsAbout = about || App._qsAbout || ""; // помним тему для перегенерации
   $("app").innerHTML=`<div class="wrap" style="max-width:560px">
     <div class="page-head" style="text-align:center;margin-top:16px">
@@ -2581,16 +2582,19 @@ async function publishPost(id){
   if(timedOut){
     if(btn) btn.innerHTML='<span class="spinner"></span> Проверяем статус…';
     const {confirmed}=await pollPostStatus(id);
-    if(confirmed){toast("Опубликовано ✓","ok");renderQueue();return;}
+    if(confirmed){tgHaptic("success");toast("Опубликовано ✓","ok");renderQueue();return;}
+    tgHaptic("error");
     toast("Не удалось подтвердить публикацию. Проверьте канал или попробуйте ещё раз.","err");
     if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
     return;
   }
   if(error){
+    tgHaptic("error");
     toast((error&&error.message)||"Не удалось опубликовать пост. Попробуйте ещё раз.","err");
     if(btn){btn.innerHTML="Опубликовать сейчас";btn.disabled=false;}
     return;
   }
+  tgHaptic("success");
   toast("Опубликовано ✓","ok");renderQueue();
 }
 async function rejectPost(id){
@@ -2728,9 +2732,23 @@ function initTelegram(){
   try{
     if(typeof tg.ready==='function') tg.ready();
     if(typeof tg.expand==='function') tg.expand();           // на весь экран
-    if(typeof tg.setHeaderColor==='function') tg.setHeaderColor("#f5f1ea");
-    if(typeof tg.setBackgroundColor==='function') tg.setBackgroundColor("#f5f1ea");
+    // Цвет — тот же --bg что и у веб-версии (см. static/styles.css :root),
+    // не старый кремовый: перекрашен вместе с общей палитрой сайта.
+    if(typeof tg.setHeaderColor==='function') tg.setHeaderColor("#eaf1f8");
+    if(typeof tg.setBackgroundColor==='function') tg.setBackgroundColor("#eaf1f8");
     if(typeof tg.disableVerticalSwipes==='function') tg.disableVerticalSwipes(); // не закрывать свайпом случайно
+    if(typeof tg.enableClosingConfirmation==='function') tg.enableClosingConfirmation(); // не закрывать случайным свайпом/кнопкой назад поверх открытого экрана
+  }catch(_){}
+}
+
+// Тактильный отклик на ключевых действиях (Mini App onlу — на обычном
+// вебе tg отсутствует, вызов просто не происходит).
+function tgHaptic(kind){
+  try{
+    const h=window.Telegram?.WebApp?.HapticFeedback;
+    if(!h) return;
+    if(kind==="success"||kind==="error"||kind==="warning") h.notificationOccurred(kind);
+    else h.impactOccurred(kind||"medium");
   }catch(_){}
 }
 
