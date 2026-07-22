@@ -178,6 +178,7 @@ def get_config():
         "bot_username": config.TELEGRAM_BOT_USERNAME,
         "public_url": config.PUBLIC_URL,
         "packages": config.TOKEN_PACKAGES,
+        "soft_control_minutes": config.SOFT_CONTROL_APPROVAL_MINUTES,
         "yookassa_enabled": billing.is_configured(),
         # Старый ключ оставлен для совместимости с фронтом, если браузер закэширует app.js.
         "yoomoney_enabled": billing.is_configured(),
@@ -870,6 +871,9 @@ async def publish(post_id: int, background_tasks: BackgroundTasks, user: User = 
     result = await tasks.publish_post(post_id)
     if not result["ok"]:
         raise HTTPException(400, result["message"])
+    # Гасим карточку "публикация после подтверждения" в Telegram, если она
+    # есть -- иначе устаревшая кнопка там могла бы среагировать повторно.
+    tasks.cancel_pending_approval(post_id)
     # Уведомление и автодогенерация очереди — после ответа клиенту, не
     # блокируют его (см. tasks.publish_post: это была причина false timeout,
     # когда автодогенерация следующего поста в очереди задерживала HTTP-ответ
@@ -900,6 +904,7 @@ async def reject_post(post_id: int, user: User = Depends(current_user)):
         channel_id = p.channel_id
         p.status = "rejected"
         s.add(p); s.commit()
+    tasks.cancel_pending_approval(post_id)
     await tasks._refill_if_active(channel_id)
     return {"ok": True}
 
@@ -910,6 +915,7 @@ async def delete_post(post_id: int, user: User = Depends(current_user)):
         p = _own_post(s, post_id, user)
         channel_id = p.channel_id
         s.delete(p); s.commit()
+    tasks.cancel_pending_approval(post_id)
     await tasks._refill_if_active(channel_id)
     return {"ok": True}
 

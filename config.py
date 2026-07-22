@@ -53,6 +53,10 @@ TELEGRAM_BOT_USERNAME = os.getenv("TELEGRAM_BOT_USERNAME", "")
 # Отдельный бот от TELEGRAM_BOT_TOKEN (который управляет @Trpst_bot, publishing bot).
 MAIN_BOT_TOKEN = os.getenv("MAIN_BOT_TOKEN", "")
 MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME", "maintrpost_bot")
+# Режим публикации "публикация после подтверждения" (Channel.auto_publish=
+# False): сколько минут висит карточка с кнопками в личке владельца канала,
+# прежде чем пост публикуется автоматически, если не было реакции.
+SOFT_CONTROL_APPROVAL_MINUTES = int(os.getenv("SOFT_CONTROL_APPROVAL_MINUTES", "30"))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./postbot.db")
 PUBLIC_URL = os.getenv("PUBLIC_URL") or (
     f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}"

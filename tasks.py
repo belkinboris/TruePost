@@ -7,12 +7,13 @@ import logging
 import random
 import re
 from datetime import datetime, timedelta
+from typing import Optional
 
 import config
 import generator
 import research
 import telegram_api
-from database import session, Channel, ChannelRule, Source, Post, User, TrafficAttribution
+from database import session, Channel, ChannelRule, Source, Post, User, TrafficAttribution, PostApproval
 from sqlmodel import select
 
 logger = logging.getLogger(__name__)
@@ -251,6 +252,13 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
         notify_pub = user.notify_published and post.status == "published"
         notify_low = user.notify_low_tokens and prev_balance > LOW_TOKENS_THRESHOLD and user.token_balance <= LOW_TOKENS_THRESHOLD
         chan_title = channel.title
+        # "Публикация после подтверждения": канал не в автопилоте, это
+        # регулярная генерация по расписанию (не ручной запрос из
+        # приложения и не догенерация резерва очереди -- обе всегда
+        # приходят с force_pending=True), и есть куда слать личку.
+        needs_approval = (not channel.auto_publish) and (not force_pending) and post.status == "pending" and bool(user.tg_chat_id)
+        approval_chat_id = user.tg_chat_id
+        approval_channel_id = channel_id
 
     # Уведомления — вне сессии, с явным chat_id
     if notify_chat_id:
@@ -258,6 +266,12 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
             await _notify_user_by_id(notify_chat_id, f"✅ <b>Пост опубликован</b>\n\nКанал: {chan_title}")
         if notify_low:
             await _notify_user_by_id(notify_chat_id, f"⚠️ <b>Токены заканчиваются</b>\n\nОсталось ~1 пост. Пополните баланс в приложении.")
+
+    if needs_approval:
+        try:
+            await _send_approval_card(pid, approval_channel_id, approval_chat_id, chan_title, text)
+        except Exception as e:
+            logger.warning(f"approval card для поста {pid}: {e}")
 
     # Если пост сразу опубликован (автопилот) — догенерируем очередь
     if pid:
@@ -319,6 +333,225 @@ async def publish_post(post_id: int) -> dict:
         "telegram_message_id": message_id,
         "published_at": published_at.isoformat(),
     }
+
+
+def cancel_pending_approval(post_id: int):
+    """
+    Гасит карточку "публикация после подтверждения", если пост был
+    опубликован/отклонён/удалён из веб-приложения раньше, чем истёк
+    таймер -- иначе tick() или уже неактуальная кнопка в Telegram могли бы
+    среагировать на уже решённый пост (например заново опубликовать пост,
+    который пользователь только что отклонил в приложении).
+    Вызывается из main.py при публикации/отклонении/удалении поста.
+    """
+    with session() as s:
+        approval = s.exec(
+            select(PostApproval).where(
+                PostApproval.post_id == post_id,
+                PostApproval.status.in_(["waiting", "awaiting_edit"]),
+            )
+        ).first()
+        if approval:
+            approval.status = "done"
+            s.add(approval); s.commit()
+
+
+def _approval_keyboard(post_id: int) -> list:
+    return [
+        [{"text": "✅ Опубликовать сейчас", "callback_data": f"appub:{post_id}"}],
+        [{"text": "✏️ Редактировать", "callback_data": f"apedit:{post_id}"},
+         {"text": "🗑 Отклонить", "callback_data": f"aprej:{post_id}"}],
+    ]
+
+
+async def _render_approval_card(chat_id: int, message_id: Optional[int], post_id: int,
+                                 channel_title: str, post_text: str, deadline: datetime,
+                                 edited: bool = False) -> dict:
+    """Собирает и отправляет/обновляет карточку поста в личке. Общая для
+    первой отправки (message_id=None -- шлём новое сообщение) и для
+    обновлений (после "Отмена" редактирования, после присланного нового
+    текста)."""
+    preview = generator._clean_post(post_text)
+    if len(preview) > 500:
+        preview = preview[:500].rstrip() + "…"
+    minutes_left = max(0, round((deadline - datetime.utcnow()).total_seconds() / 60))
+    prefix = "✏️ <b>Текст обновлён.</b>\n\n" if edited else f"📝 <b>Новый пост для канала «{channel_title}»</b>\n\n"
+    card_text = (
+        f"{prefix}{preview}\n\n"
+        f"⏱ Опубликуется автоматически через {minutes_left} мин, если не подтвердите раньше."
+    )
+    keyboard = _approval_keyboard(post_id)
+    if message_id:
+        return await telegram_api.edit_message_text(chat_id, message_id, card_text, keyboard=keyboard)
+    return await telegram_api.send_dm_with_keyboard(chat_id, card_text, keyboard)
+
+
+async def _send_approval_card(post_id: int, channel_id: int, chat_id: int, channel_title: str, post_text: str):
+    """Первая отправка карточки для только что сгенерированного поста --
+    заводит дедлайн и запись PostApproval."""
+    deadline = datetime.utcnow() + timedelta(minutes=config.SOFT_CONTROL_APPROVAL_MINUTES)
+    result = await _render_approval_card(chat_id, None, post_id, channel_title, post_text, deadline)
+    if not result.get("ok"):
+        logger.warning(f"approval card для поста {post_id}: не удалось отправить, {result.get('description')}")
+        return
+    message_id = result["result"].get("message_id")
+    with session() as s:
+        s.add(PostApproval(
+            post_id=post_id, channel_id=channel_id,
+            review_chat_id=chat_id, review_message_id=message_id,
+            deadline=deadline,
+        ))
+        s.commit()
+
+
+async def _auto_publish_after_timeout(approval_id: int, post_id: int, review_chat_id: int, review_message_id: Optional[int]):
+    """Вызывается из tick(), когда дедлайн подтверждения истёк без реакции."""
+    with session() as s:
+        approval = s.get(PostApproval, approval_id)
+        if not approval or approval.status != "waiting":
+            return  # уже обработано (нажали кнопку) между выборкой и этим тиком
+        approval.status = "done"
+        s.add(approval); s.commit()
+
+        post = s.get(Post, post_id)
+        if not post or post.status != "pending":
+            return  # решено другим путём (например отклонено в приложении)
+
+    result = await publish_post(post_id)
+    if review_message_id:
+        if result.get("ok"):
+            text = "⏱ Время на подтверждение истекло — опубликовано автоматически."
+        else:
+            text = f"⚠️ Время на подтверждение истекло, но опубликовать не удалось: {result.get('message', 'ошибка')}"
+        try:
+            await telegram_api.edit_message_text(review_chat_id, review_message_id, text)
+        except Exception as e:
+            logger.warning(f"approval timeout: не удалось обновить карточку поста {post_id}: {e}")
+    if result.get("ok"):
+        await post_publish_followup(post_id)
+
+
+async def _handle_approval_callback(cq: dict):
+    """Обрабатывает нажатие кнопки на карточке поста в личке."""
+    cq_id = cq.get("id")
+    data = cq.get("data", "") or ""
+    chat_id = cq.get("message", {}).get("chat", {}).get("id")
+    message_id = cq.get("message", {}).get("message_id")
+
+    try:
+        action, post_id_str = data.split(":", 1)
+        post_id = int(post_id_str)
+    except ValueError:
+        await telegram_api.answer_callback_query(cq_id)
+        return
+
+    with session() as s:
+        approval = s.exec(select(PostApproval).where(PostApproval.post_id == post_id)).first()
+
+    if not approval or approval.review_chat_id != chat_id:
+        await telegram_api.answer_callback_query(cq_id, "Карточка устарела.", show_alert=True)
+        return
+
+    if action == "appub":
+        if approval.status != "waiting":
+            await telegram_api.answer_callback_query(cq_id, "Уже обработано.")
+            return
+        with session() as s:
+            a = s.get(PostApproval, approval.id)
+            a.status = "done"; s.add(a); s.commit()
+            post = s.get(Post, post_id)
+            still_pending = bool(post and post.status == "pending")
+        await telegram_api.answer_callback_query(cq_id, "Публикую…")
+        if not still_pending:
+            await telegram_api.edit_message_text(chat_id, message_id, "Пост уже решён другим путём.")
+            return
+        result = await publish_post(post_id)
+        if result.get("ok"):
+            await telegram_api.edit_message_text(chat_id, message_id, "✅ Опубликовано.")
+            await post_publish_followup(post_id)
+        else:
+            await telegram_api.edit_message_text(chat_id, message_id, f"⚠️ Не удалось опубликовать: {result.get('message', 'ошибка')}")
+
+    elif action == "aprej":
+        if approval.status != "waiting":
+            await telegram_api.answer_callback_query(cq_id, "Уже обработано.")
+            return
+        with session() as s:
+            a = s.get(PostApproval, approval.id)
+            a.status = "done"; s.add(a)
+            post = s.get(Post, post_id)
+            channel_id = post.channel_id if post else None
+            if post and post.status == "pending":
+                post.status = "rejected"
+                s.add(post)
+            s.commit()
+        await telegram_api.answer_callback_query(cq_id, "Отклонено.")
+        await telegram_api.edit_message_text(chat_id, message_id, "🗑 Пост отклонён.")
+        if channel_id:
+            await _refill_if_active(channel_id)
+
+    elif action == "apedit":
+        if approval.status != "waiting":
+            await telegram_api.answer_callback_query(cq_id, "Уже обработано.")
+            return
+        with session() as s:
+            a = s.get(PostApproval, approval.id)
+            a.status = "awaiting_edit"; s.add(a); s.commit()
+        await telegram_api.answer_callback_query(cq_id)
+        await telegram_api.edit_message_text(
+            chat_id, message_id,
+            "✏️ Пришлите новый текст поста ответным сообщением боту.",
+            keyboard=[[{"text": "Отмена", "callback_data": f"apcancel:{post_id}"}]],
+        )
+
+    elif action == "apcancel":
+        if approval.status != "awaiting_edit":
+            await telegram_api.answer_callback_query(cq_id, "Уже обработано.")
+            return
+        with session() as s:
+            a = s.get(PostApproval, approval.id)
+            a.status = "waiting"; s.add(a); s.commit()
+            post = s.get(Post, post_id)
+            channel = s.get(Channel, post.channel_id) if post else None
+            post_text = post.text if post else ""
+            channel_title = channel.title if channel else ""
+            deadline = a.deadline
+        await telegram_api.answer_callback_query(cq_id)
+        await _render_approval_card(chat_id, message_id, post_id, channel_title, post_text, deadline)
+
+    else:
+        await telegram_api.answer_callback_query(cq_id)
+
+
+async def _handle_possible_edit_reply(chat_id: int, new_text: str):
+    """Если этот чат сейчас в режиме редактирования поста (нажали
+    "Редактировать" на карточке) -- сообщение считается новым текстом
+    поста. Иначе просто игнорируется (не /start, не команда)."""
+    with session() as s:
+        approval = s.exec(
+            select(PostApproval).where(
+                PostApproval.review_chat_id == chat_id,
+                PostApproval.status == "awaiting_edit",
+            )
+        ).first()
+        if not approval:
+            return
+        post = s.get(Post, approval.post_id)
+        if not post:
+            return
+        cleaned = new_text.strip()
+        if not cleaned:
+            return
+        post.text = cleaned
+        approval.status = "waiting"
+        channel = s.get(Channel, post.channel_id)
+        s.add(post); s.add(approval); s.commit()
+        post_id = post.id
+        message_id = approval.review_message_id
+        deadline = approval.deadline
+        channel_title = channel.title if channel else ""
+
+    await _render_approval_card(chat_id, message_id, post_id, channel_title, cleaned, deadline, edited=True)
 
 
 async def post_publish_followup(post_id: int):
@@ -430,25 +663,49 @@ _last_update_id = 0
 _last_main_bot_update_id = 0
 
 async def _process_bot_updates():
-    """Получает обновления от бота и привязывает chat_id к аккаунтам."""
+    """
+    Получает обновления от бота: /start привязывает chat_id к аккаунту,
+    callback_query обрабатывает кнопки карточки "публикация после
+    подтверждения" (см. _handle_approval_callback), обычный текст —
+    новый текст поста, если чат сейчас в режиме редактирования
+    (см. _handle_possible_edit_reply).
+    """
     global _last_update_id
     import telegram_api as tg
     result = await tg._call("getUpdates", {
         "offset": _last_update_id + 1,
         "timeout": 0,
         "limit": 100,
-        "allowed_updates": ["message"]
+        "allowed_updates": ["message", "callback_query"]
     })
     if not result.get("ok"):
         return
     updates = result.get("result", [])
     for upd in updates:
         _last_update_id = upd["update_id"]
+
+        cq = upd.get("callback_query")
+        if cq:
+            try:
+                await _handle_approval_callback(cq)
+            except Exception as e:
+                logger.warning(f"approval callback: {e}")
+            continue
+
         msg = upd.get("message", {})
         text = msg.get("text", "")
         chat_id = msg.get("chat", {}).get("id")
-        if not text.startswith("/start") or not chat_id:
+        if not chat_id:
             continue
+
+        if not text.startswith("/start"):
+            if text:
+                try:
+                    await _handle_possible_edit_reply(chat_id, text)
+                except Exception as e:
+                    logger.warning(f"edit reply от chat_id={chat_id}: {e}")
+            continue
+
         parts = text.strip().split()
         user_id = None
         if len(parts) > 1 and parts[1].startswith("u"):
@@ -655,3 +912,14 @@ async def tick():
             await publish_post(pid)
         except Exception as e:
             logger.error(f"tick: пост {pid}: {e}")
+
+    # "Публикация после подтверждения": дедлайн истёк без реакции — публикуем сами
+    with session() as s:
+        from database import due_post_approvals
+        due_approvals = [(a.id, a.post_id, a.review_chat_id, a.review_message_id) for a in due_post_approvals(s, now)]
+
+    for approval_id, post_id, review_chat_id, review_message_id in due_approvals:
+        try:
+            await _auto_publish_after_timeout(approval_id, post_id, review_chat_id, review_message_id)
+        except Exception as e:
+            logger.error(f"tick: approval-timeout пост {post_id}: {e}")

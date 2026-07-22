@@ -20,15 +20,16 @@ async function renderQueue(){
 
   // Пояснительный блок про автопубликацию (task item D) — снимает путаницу
   // между "пост ждёт подтверждения" и "пост скоро опубликуется сам".
+  const softControlMin = App.cfg?.soft_control_minutes || 30;
   const autoPublishInfo = c.auto_publish
     ? `<div class="card" style="background:var(--blue-bg);border:none;margin-bottom:14px;padding:14px 16px">
-        <div style="font-size:13px;color:var(--blue);font-weight:600">Автопубликация включена</div>
+        <div style="font-size:13px;color:var(--blue);font-weight:600">Автоматическая публикация</div>
         <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Посты будут выходить по расписанию каждые ${_intervalLabel(c.interval_hours||12)}.</div>
         <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--blue)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Изменить</button>
       </div>`
     : `<div class="card" style="background:var(--accent-soft);border:none;margin-bottom:14px;padding:14px 16px">
-        <div style="font-size:13px;color:var(--accent-dark);font-weight:600">Автопубликация выключена</div>
-        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Посты ждут вашего подтверждения. Можно включить автопубликацию в настройках.</div>
+        <div style="font-size:13px;color:var(--accent-dark);font-weight:600">Публикация после подтверждения</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Новый пост присылаем вам в Telegram с кнопками. Опубликуется сам через ${softControlMin} мин, если не отреагируете.</div>
         <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--accent-dark)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Открыть настройки</button>
       </div>`;
 
@@ -121,7 +122,7 @@ function renderSettings(){
     <div class="card" id="settings_automation_card">
       <div class="card-title">Автоматизация</div>
       <div class="toggle-row">
-        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию, без вашего подтверждения. Если выключено — каждый пост ждёт, пока вы нажмёте «Опубликовать сейчас».</small></div>
+        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала приходит вам в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать» и публикуется сам через ${App.cfg?.soft_control_minutes||30} мин, если не отреагируете.</small></div>
         <label class="switch"><input type="checkbox" id="sw_auto" ${c.auto_publish?"checked":""}><span class="slider"></span></label>
       </div>
       <div class="toggle-row">

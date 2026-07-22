@@ -247,6 +247,63 @@ async def send_message(chat: str, text: str) -> dict:
     return last_result
 
 
+async def send_dm_with_keyboard(chat_id: int, text: str, keyboard: list) -> dict:
+    """
+    Отправляет сообщение напрямую в личку по числовому chat_id (как
+    send_notification, БЕЗ normalize_chat -- это не username канала) с
+    inline-клавиатурой. Для карточки "публикация после подтверждения".
+    Тот же ретрай на сетевые сбои, что и send_message -- карточка не менее
+    важна, чем сама публикация: если она не дойдёт, пользователь не узнает,
+    что можно вмешаться до автопубликации.
+    """
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML",
+        "disable_web_page_preview": True,
+        "reply_markup": {"inline_keyboard": keyboard},
+    }
+    last_result = None
+    for attempt in range(3):
+        result = await _call("sendMessage", payload)
+        last_result = result
+        if result.get("ok"):
+            return result
+        desc = result.get("description", "")
+        if "network_error" not in desc:
+            return result
+        logger.warning(f"send_dm_with_keyboard: сетевой сбой на попытке {attempt + 1}/3, chat_id={chat_id}")
+        if attempt < 2:
+            await asyncio.sleep(2 * (attempt + 1))
+    return last_result
+
+
+async def edit_message_text(chat_id: int, message_id: int, text: str, keyboard: list | None = None) -> dict:
+    """Редактирует уже отправленную карточку (обновлённый превью текста,
+    смена статуса на "опубликовано"/"отклонено", и т.п.). Best-effort --
+    вызывающий код не должен падать, если Telegram вернул ошибку (сообщение
+    могло быть удалено пользователем и т.п.)."""
+    payload = {
+        "chat_id": chat_id,
+        "message_id": message_id,
+        "text": text,
+        "parse_mode": "HTML",
+    }
+    if keyboard is not None:
+        payload["reply_markup"] = {"inline_keyboard": keyboard}
+    return await _call("editMessageText", payload)
+
+
+async def answer_callback_query(callback_query_id: str, text: str = "", show_alert: bool = False) -> dict:
+    """Обязательный ответ на нажатие inline-кнопки -- без него Telegram
+    показывает пользователю бесконечную "часики" на кнопке."""
+    payload = {"callback_query_id": callback_query_id}
+    if text:
+        payload["text"] = text
+        payload["show_alert"] = show_alert
+    return await _call("answerCallbackQuery", payload)
+
+
 async def send_notification(tg_chat_id: int, text: str) -> tuple[bool, str]:
     """
     Отправляет уведомление пользователю по его числовому chat_id.
