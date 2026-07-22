@@ -550,25 +550,40 @@ def _channel_dict(s, ch: Channel) -> dict:
     # Данные для карточки канала в кабинете: что дальше в очереди и когда
     # опубликуется -- без этого карточка показывает только настройки, а не
     # реальное состояние (см. редизайн кабинета).
-    next_post = s.exec(
-        select(Post).where(Post.channel_id == ch.id, Post.status == "pending")
-        .order_by(Post.created_at)
-    ).first()
-    d["next_post_preview"] = generator._clean_post(next_post.text)[:220] if next_post else None
-    d["queue_count"] = len(s.exec(
-        select(Post).where(Post.channel_id == ch.id, Post.status.in_(["pending", "scheduled"]))
-    ).all())
-    d["published_count"] = len(s.exec(
-        select(Post).where(Post.channel_id == ch.id, Post.status == "published")
-    ).all())
-
+    #
+    # КРИТИЧНО: обёрнуто в try/except с rollback. Раньше исключение здесь
+    # (например в generator._clean_post на реальном, а не тестовом тексте
+    # поста) валило весь /api/channels целиком -- пользователь не видел
+    # вообще ни одного канала вместо одной недостающей детали на карточке.
+    # rollback() обязателен для Postgres: без него упавший запрос оставляет
+    # транзакцию в aborted-состоянии, и следующий запрос (для этого же или
+    # СЛЕДУЮЩЕГО канала в списке, та же сессия s) тоже упадёт с
+    # "current transaction is aborted", даже если сам по себе он корректен.
+    d["next_post_preview"] = None
+    d["queue_count"] = 0
+    d["published_count"] = 0
     d["approval_deadline"] = None
-    if next_post:
-        approval = s.exec(
-            select(PostApproval).where(PostApproval.post_id == next_post.id, PostApproval.status == "waiting")
+    try:
+        next_post = s.exec(
+            select(Post).where(Post.channel_id == ch.id, Post.status == "pending")
+            .order_by(Post.created_at)
         ).first()
-        if approval:
-            d["approval_deadline"] = approval.deadline.isoformat() + "Z"
+        d["next_post_preview"] = generator._clean_post(next_post.text)[:220] if next_post else None
+        d["queue_count"] = len(s.exec(
+            select(Post).where(Post.channel_id == ch.id, Post.status.in_(["pending", "scheduled"]))
+        ).all())
+        d["published_count"] = len(s.exec(
+            select(Post).where(Post.channel_id == ch.id, Post.status == "published")
+        ).all())
+        if next_post:
+            approval = s.exec(
+                select(PostApproval).where(PostApproval.post_id == next_post.id, PostApproval.status == "waiting")
+            ).first()
+            if approval:
+                d["approval_deadline"] = approval.deadline.isoformat() + "Z"
+    except Exception:
+        logger.exception(f"_channel_dict: не удалось обогатить карточку канала {ch.id}, отдаю без превью/счётчиков")
+        s.rollback()
     return d
 
 
