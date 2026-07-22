@@ -2796,7 +2796,10 @@ async function openTgConnect(){
     // Нет токена — пользователь не авторизован (например Mini App без localStorage)
     const twa = window.Telegram?.WebApp;
     if(twa && typeof twa.showAlert==='function'){
-      twa.showAlert("Войдите в аккаунт на сайте autopost.projectsozdatel.ru, а затем откройте уведомления снова.");
+      // Домен берём из /api/config (App.cfg.public_url), не хардкодим --
+      // при следующем переезде домена не должно снова "зависать" тут.
+      const site=(App.cfg?.public_url||"https://projectautopost.ru").replace(/^https?:\/\//,"");
+      twa.showAlert(`Войдите в аккаунт на сайте ${site}, а затем откройте уведомления снова.`);
     } else {
       toast("Не удалось определить аккаунт. Попробуйте войти заново.","err");
     }

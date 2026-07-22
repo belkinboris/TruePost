@@ -98,15 +98,17 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Автопост", lifespan=lifespan)
 
-# CORS: фронтенд раздаётся с российского хостинга (app.projectsozdatel.ru),
-# API остаётся здесь (Railway за Cloudflare). Браузеру нужно явное разрешение
-# на кросс-доменные запросы с Authorization-заголовком.
+# CORS: сейчас фронтенд и API раздаются с одного и того же FastAPI-приложения
+# (см. app.mount("/static", ...) и роуты "/", "/landing" ниже) -- для этих
+# запросов CORS браузером не проверяется вообще (same-origin). Список ниже --
+# страховка на случай кросс-доменного обращения (например со старого
+# закэшированного домена у части пользователей, или будущей отдельной
+# статики) с Authorization-заголовком.
 from fastapi.middleware.cors import CORSMiddleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "https://app.projectsozdatel.ru",
-        "https://autopost.projectsozdatel.ru",  # same-origin вариант остаётся рабочим
+        "https://projectautopost.ru",
     ],
     allow_methods=["*"],
     allow_headers=["Authorization", "Content-Type"],
