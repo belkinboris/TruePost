@@ -104,6 +104,33 @@ class Post(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class PostApproval(SQLModel, table=True):
+    """
+    Состояние поста в режиме "публикация после подтверждения"
+    (Channel.auto_publish=False, пост сгенерирован по расписанию, а не
+    вручную). Пока для поста есть строка здесь со статусом "waiting" и
+    deadline в будущем -- в личке владельца канала висит карточка с
+    кнопками "Опубликовать сейчас" / "Отклонить" / "Редактировать".
+    tick() публикует пост автоматически, как только deadline проходит
+    (см. tasks.py).
+
+    status: waiting (таймер идёт) | awaiting_edit (ждём новый текст
+    ответным сообщением) | done (решено -- опубликован/отклонён/устарел).
+
+    Новая отдельная таблица -- та же безопасная схема, что LandingEvent/
+    TrafficAttribution/IdempotencyKey: создаётся через create_all(), без
+    ALTER TABLE на Post/Channel.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    post_id: int = Field(foreign_key="post.id", index=True, unique=True)
+    channel_id: int = Field(foreign_key="channel.id", index=True)
+    review_chat_id: int
+    review_message_id: Optional[int] = None
+    deadline: datetime
+    status: str = "waiting"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class Payment(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)
@@ -241,4 +268,10 @@ def all_enabled_channels(s: Session) -> list[Channel]:
 def due_scheduled_posts(s: Session, now: datetime) -> list[Post]:
     return list(
         s.exec(select(Post).where(Post.status == "scheduled", Post.scheduled_at <= now)).all()
+    )
+
+
+def due_post_approvals(s: Session, now: datetime) -> list[PostApproval]:
+    return list(
+        s.exec(select(PostApproval).where(PostApproval.status == "waiting", PostApproval.deadline <= now)).all()
     )
