@@ -27,6 +27,16 @@ function setQueueViewMode(mode){
 }
 
 function renderQueueBody(){
+  // Если где-то шёл отсчёт отмены публикации (см. publishPost/_pendingPublish
+  // в app.part15.js) -- полная перерисовка сейчас уничтожит ту кнопку, но
+  // таймер в памяти продолжил бы тикать невидимо и опубликовал бы пост без
+  // единого предупреждения на экране. Уход с этой кнопки -- считаем неявной
+  // отменой, безопаснее не публиковать, чем опубликовать незаметно.
+  Object.keys(_pendingPublish).forEach(id=>{
+    clearInterval(_pendingPublish[id].intervalId);
+    clearTimeout(_pendingPublish[id].timeoutId);
+    delete _pendingPublish[id];
+  });
   const posts=App._queuePosts||[];
   const pending=posts.filter(p=>p.status==="pending"||p.status==="onboarding"||p.status==="scheduled");
   const history=posts.filter(p=>p.status==="published"||p.status==="rejected");
