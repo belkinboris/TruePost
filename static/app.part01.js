@@ -40,6 +40,9 @@ function trackGoal(goal, params={}){
 // ── CTA/Journey Diagnostics: захват lp_session + UTM из URL лендинга (Part 4) ──
 const _sentLandingEvents = new Set(); // дедуп в рамках одной загрузки страницы
 
+// Возвращает true, если это похоже на свежий приход с лендинга/рекламы
+// (не возврат уже знакомого с продуктом пользователя) -- boot() использует
+// это, чтобы показать сразу форму регистрации, а не входа (см. ниже).
 function captureLandingSession(){
   try{
     // 1. Telegram Mini App: ?startapp=lp_<id> приходит как start_param, не как обычный query-параметр
@@ -52,7 +55,7 @@ function captureLandingSession(){
       // событие отражает именно это (см. diagnostic_notes на backend).
       logLandingEventWeb("bot_start_from_landing");
       logLandingEventWeb("web_register_opened");
-      return;
+      return true;
     }
 
     // 2. Обычный веб-переход: /?lp_session=<id>&utm_...
@@ -70,8 +73,10 @@ function captureLandingSession(){
         localStorage.setItem("ap_lp_utm",JSON.stringify(utm));
       }
       logLandingEventWeb("web_register_opened");
+      return true;
     }
   }catch(_){}
+  return false;
 }
 
 function logLandingEventWeb(eventName){

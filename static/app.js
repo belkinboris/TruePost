@@ -40,6 +40,9 @@ function trackGoal(goal, params={}){
 // ── CTA/Journey Diagnostics: захват lp_session + UTM из URL лендинга (Part 4) ──
 const _sentLandingEvents = new Set(); // дедуп в рамках одной загрузки страницы
 
+// Возвращает true, если это похоже на свежий приход с лендинга/рекламы
+// (не возврат уже знакомого с продуктом пользователя) -- boot() использует
+// это, чтобы показать сразу форму регистрации, а не входа (см. ниже).
 function captureLandingSession(){
   try{
     // 1. Telegram Mini App: ?startapp=lp_<id> приходит как start_param, не как обычный query-параметр
@@ -52,7 +55,7 @@ function captureLandingSession(){
       // событие отражает именно это (см. diagnostic_notes на backend).
       logLandingEventWeb("bot_start_from_landing");
       logLandingEventWeb("web_register_opened");
-      return;
+      return true;
     }
 
     // 2. Обычный веб-переход: /?lp_session=<id>&utm_...
@@ -70,8 +73,10 @@ function captureLandingSession(){
         localStorage.setItem("ap_lp_utm",JSON.stringify(utm));
       }
       logLandingEventWeb("web_register_opened");
+      return true;
     }
   }catch(_){}
+  return false;
 }
 
 function logLandingEventWeb(eventName){
@@ -336,7 +341,7 @@ function renderAuth(mode="login"){
   const tgInitData=_tgAuthInitData();
   $("app").innerHTML=`<div class="auth-wrap"><div class="auth-box">
     <div class="auth-logo">Авто<span>пост</span></div>
-    <div class="auth-sub">ИИ ведёт твой Telegram-канал на автопилоте</div>
+    <div class="auth-sub">ИИ пишет посты для твоего Telegram-канала — автопилот или с вашим подтверждением</div>
     ${tgInitData?`<div class="card" style="text-align:center">
       <div style="font-size:14px;color:var(--text-dim);margin-bottom:14px">Вы открыли АвтоПост в Telegram</div>
       <button class="btn" style="width:100%;justify-content:center;padding:14px" id="tgContinueBtn" onclick="tgContinueAuth()">Продолжить как ${esc(_tgAuthFirstName())}</button>
@@ -3087,7 +3092,7 @@ async function boot(){
   initTelegramAsync();
   initTelegram(); // если SDK уже был закэширован браузером — сработает сразу, без вреда если его ещё нет
 
-  captureLandingSession();
+  const _cameFromLanding = captureLandingSession();
 
   // КРИТИЧНО (BUG-003 fix): /config больше НЕ блокирует первый экран.
   // App.cfg используется только с ?. и фолбэками (bot_username, флаги
@@ -3106,7 +3111,12 @@ async function boot(){
   initCookieBanner();initKeyboardDismiss();
   if(!App.token){
     console.log(`[timing] boot() total (no token, -> renderAuth): ${(performance.now()-t0).toFixed(0)}ms`);
-    renderAuth();
+    // КРИТИЧНО (UX fix): пришедшего только что с лендинга/рекламы -- у него
+    // точно нет аккаунта -- показываем сразу форму регистрации, а не входа.
+    // Раньше ЛЮБОЙ визит без токена (и свежий с рекламы, и просто истёкшая
+    // сессия у старого пользователя) показывал форму входа по умолчанию --
+    // новый человек должен был сам заметить и нажать "Зарегистрироваться".
+    renderAuth(_cameFromLanding ? "register" : "login");
     try{ performance.mark('first_screen_visible'); performance.mark('boot_complete'); }catch(_){}
     console.log('[timing] first_screen_visible (renderAuth)');
     return;
