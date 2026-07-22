@@ -117,6 +117,14 @@ class PostApproval(SQLModel, table=True):
     status: waiting (таймер идёт) | awaiting_edit (ждём новый текст
     ответным сообщением) | done (решено -- опубликован/отклонён/устарел).
 
+    final_warning_sent: когда deadline проходит, tick() не публикует пост
+    в ту же секунду -- сначала присылает предупреждение ("публикую через
+    минуту") и сдвигает deadline на SOFT_CONTROL_FINAL_GRACE_SECONDS
+    вперёд, выставляя этот флаг. Реальная публикация происходит только
+    когда deadline снова проходит И флаг уже True -- даёт человеку
+    последний шанс успеть нажать "Отклонить"/"Редактировать", вместо
+    мгновенной необратимой публикации в канал.
+
     Новая отдельная таблица -- та же безопасная схема, что LandingEvent/
     TrafficAttribution/IdempotencyKey: создаётся через create_all(), без
     ALTER TABLE на Post/Channel.
@@ -128,6 +136,7 @@ class PostApproval(SQLModel, table=True):
     review_message_id: Optional[int] = None
     deadline: datetime
     status: str = "waiting"
+    final_warning_sent: bool = False
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 

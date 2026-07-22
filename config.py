@@ -57,6 +57,10 @@ MAIN_BOT_USERNAME = os.getenv("MAIN_BOT_USERNAME", "maintrpost_bot")
 # False): сколько минут висит карточка с кнопками в личке владельца канала,
 # прежде чем пост публикуется автоматически, если не было реакции.
 SOFT_CONTROL_APPROVAL_MINUTES = int(os.getenv("SOFT_CONTROL_APPROVAL_MINUTES", "30"))
+# Финальный буфер перед самой публикацией (и после дедлайна, и после
+# только что присланной правки текста) -- последний шанс отменить/
+# поправить, вместо мгновенной необратимой публикации в канал.
+SOFT_CONTROL_FINAL_GRACE_SECONDS = int(os.getenv("SOFT_CONTROL_FINAL_GRACE_SECONDS", "60"))
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./postbot.db")
 PUBLIC_URL = os.getenv("PUBLIC_URL") or (
     f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}"
