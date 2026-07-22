@@ -1204,7 +1204,7 @@ async function renderPublishConfirm(channelId, tgChat){
     <div class="page-head" style="text-align:center;margin-top:24px">
       <div style="font-size:36px;margin-bottom:6px">✅</div>
       <h1 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">Канал подключён</h1>
-      <p style="color:var(--text-dim)">Первый пост готов. Опубликовать его сейчас?</p>
+      <p style="color:var(--text-dim)">${pending?"Первый пост готов. Опубликовать его сейчас?":"Пока нет готового поста — можно создать новый."}</p>
     </div>
     ${pending?`<div class="card" style="font-size:14px;line-height:1.6;max-height:200px;overflow:hidden;position:relative">
       ${renderTg(pending.text)}
@@ -1216,8 +1216,8 @@ async function renderPublishConfirm(channelId, tgChat){
       id="cpc_publish_btn" ${pending?"":"disabled"}>Опубликовать сейчас</button>
 
     <div style="display:flex;gap:8px;margin-top:10px">
-      <button class="btn-outline btn-sm" style="flex:1" onclick="go('channel',${channelId})">Оставить на проверке</button>
-      <button class="btn-outline btn-sm" style="flex:1" onclick="ccGoSchedule(${channelId},${pending?pending.id:"null"})" ${pending?"":"disabled"}>Запланировать</button>
+      <button class="btn-outline btn-sm" style="flex:1" onclick="_cancelPendingCcPublish(${pending?pending.id:"null"});go('channel',${channelId})">Оставить на проверке</button>
+      <button class="btn-outline btn-sm" style="flex:1" onclick="_cancelPendingCcPublish(${pending?pending.id:"null"});ccGoSchedule(${channelId},${pending?pending.id:"null"})" ${pending?"":"disabled"}>Запланировать</button>
     </div>
   </div>`;
 }
@@ -1247,9 +1247,51 @@ async function pollPostStatus(postId, maxWaitMs=20000, intervalMs=2000){
   return {confirmed:false, status:null};
 }
 
+// КРИТИЧНО (UX fix): тот же принцип "минута на отмену" что и в publishPost()
+// (app.part15.js) -- этот экран как раз и есть тот самый случай "сразу после
+// подключения канала", который был явно назван проблемой (см. комментарий
+// там). Раньше именно здесь публикация была абсолютно мгновенной.
+const _pendingCcPublish = {}; // postId -> {intervalId, timeoutId}
+
+function _cancelPendingCcPublish(postId){
+  if(postId && _pendingCcPublish[postId]){
+    clearInterval(_pendingCcPublish[postId].intervalId);
+    clearTimeout(_pendingCcPublish[postId].timeoutId);
+    delete _pendingCcPublish[postId];
+  }
+}
+
 async function ccConfirmPublish(channelId, postId, tgChat){
   if(!requireAuth()) return;
   if(!postId) return;
+
+  if(_pendingCcPublish[postId]){
+    _cancelPendingCcPublish(postId);
+    const btn=$("cpc_publish_btn");
+    if(btn) btn.textContent="Опубликовать сейчас";
+    toast("Публикация отменена","ok");
+    return;
+  }
+
+  const btn=$("cpc_publish_btn");
+  const _fmt=(s)=>`${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`;
+  let secondsLeft=60;
+  if(btn) btn.textContent=`Отменить (${_fmt(secondsLeft)})`;
+  const intervalId=setInterval(()=>{
+    secondsLeft--;
+    if(secondsLeft<=0){clearInterval(intervalId);return;}
+    const liveBtn=$("cpc_publish_btn");
+    if(liveBtn) liveBtn.textContent=`Отменить (${_fmt(secondsLeft)})`;
+  },1000);
+  const timeoutId=setTimeout(()=>{
+    delete _pendingCcPublish[postId];
+    _doCcConfirmPublish(channelId, postId, tgChat);
+  },60000);
+  _pendingCcPublish[postId]={intervalId,timeoutId};
+  toast("Опубликуется через минуту — можно отменить","ok");
+}
+
+async function _doCcConfirmPublish(channelId, postId, tgChat){
   const btn=$("cpc_publish_btn");
   btn.innerHTML='<span class="spinner"></span> Публикуем…';btn.disabled=true;
 
@@ -1837,14 +1879,14 @@ function renderPostCard(p, pubMs, channelEnabled){
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     menuItems=`
       <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">⏰ Запланировать</button>
-      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>
+      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Отклонить</button>
       <button class="menu-item" onclick="closePostMenu(${p.id});regenPost(${p.id})" id="regen_${p.id}">↻ Сгенерировать заново</button>`;
   } else if(sched){
     primaryBtn=`<button class="btn-outline btn-sm" onclick="toggleEdit(${p.id})" id="edit_${p.id}">Изменить</button>`;
     secondaryBtn=`<button class="btn-ghost btn-sm" onclick="publishPost(${p.id})" ${publishDisabledAttr}>Опубликовать сейчас</button>`;
     menuItems=`
       <button class="menu-item" onclick="closePostMenu(${p.id});showPicker(${p.id})">📅 Перенести</button>
-      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Удалить</button>`;
+      <button class="menu-item menu-item-danger" onclick="closePostMenu(${p.id});rejectPost(${p.id})">Отклонить</button>`;
   } else if(p.status==="published"){
     const chatLabel=(App._chan?.tg_chat||"").replace(/^https?:\/\/t\.me\//i,"").replace(/^@/,"");
     const tgUrl=p.tg_message_id&&chatLabel?`https://t.me/${chatLabel}/${p.tg_message_id}`:`https://t.me/${chatLabel}`;
@@ -2216,7 +2258,7 @@ function renderSettings(){
         <label class="switch"><input type="checkbox" id="sw_n2" ${App.user?.notify_published?"checked":""}><span class="slider"></span></label>
       </div>
       <div class="toggle-row">
-        <div class="toggle-info"><b>Токены заканчиваются</b><small>~1 пост остался</small></div>
+        <div class="toggle-info"><b>Баланс заканчивается</b><small>Уведомим, когда постов почти не останется</small></div>
         <label class="switch"><input type="checkbox" id="sw_n3" ${App.user?.notify_low_tokens!==false?"checked":""}><span class="slider"></span></label>
       </div>
     </div>
@@ -2240,12 +2282,16 @@ async function testPost(){
     const posts=await api("GET","/channels/"+App._chan.id+"/posts");
     const p=posts.find(x=>x.id===r.post_id)||{text:"",tokens_used:0,id:r.post_id};
     trackGoal("post_generated",{source:"test",channel_id:App._chan.id});
-    $("test_result").innerHTML=`<div class="card" style="background:var(--surface2)">
+    // id="pc_{id}" -- без него publishPost() (app.part15.js) не находит
+    // кнопку по её обычному пути поиска и не может показать отсчёт отмены,
+    // из-за чего публикация тихо срабатывает через минуту без единого
+    // видимого предупреждения на этой карточке.
+    $("test_result").innerHTML=`<div class="card" id="pc_${p.id}" style="background:var(--surface2)">
 
       <div class="post-body">${renderTg(p.text)}</div>
       <div class="post-actions" style="margin-top:10px">
         <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Опубликовать</button>
-        <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Удалить</button>
+        <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Отклонить</button>
       </div></div>`;
   }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
   btn.innerHTML="▷ Создать тестовый пост";btn.disabled=false;

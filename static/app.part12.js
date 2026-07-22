@@ -8,12 +8,16 @@ async function testPost(){
     const posts=await api("GET","/channels/"+App._chan.id+"/posts");
     const p=posts.find(x=>x.id===r.post_id)||{text:"",tokens_used:0,id:r.post_id};
     trackGoal("post_generated",{source:"test",channel_id:App._chan.id});
-    $("test_result").innerHTML=`<div class="card" style="background:var(--surface2)">
+    // id="pc_{id}" -- без него publishPost() (app.part15.js) не находит
+    // кнопку по её обычному пути поиска и не может показать отсчёт отмены,
+    // из-за чего публикация тихо срабатывает через минуту без единого
+    // видимого предупреждения на этой карточке.
+    $("test_result").innerHTML=`<div class="card" id="pc_${p.id}" style="background:var(--surface2)">
 
       <div class="post-body">${renderTg(p.text)}</div>
       <div class="post-actions" style="margin-top:10px">
         <button class="btn btn-green btn-sm" onclick="publishPost(${p.id})">✓ Опубликовать</button>
-        <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Удалить</button>
+        <button class="btn-danger btn-sm" onclick="rejectPost(${p.id})">Отклонить</button>
       </div></div>`;
   }catch(e){toast(e&&e.message?e.message:"Ошибка запроса","err");}
   btn.innerHTML="▷ Создать тестовый пост";btn.disabled=false;
