@@ -481,18 +481,62 @@ async function renderDashboard(){
     <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
     <div id="dash_footer"></div></div>`;
   const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
-  $("chans").innerHTML=chans.map(c=>{
-    const verified=c.verified?`<span class="chip chip-green">● подключён</span>`:`<span class="chip chip-orange">● не проверен</span>`;
-    return `<div class="chan-card" onclick="go('channel',${c.id})">
-      <h3>${esc(c.title)}</h3>
-      <div class="chan-handle">${esc(c.tg_chat||"не подключён")}</div>
-      <div class="chan-about">${esc(c.about)||"<span class='text-faint'>тема не задана</span>"}</div>
-      <div class="chan-foot">${verified}
-        <span class="chip chip-gray">🕑 ${_intervalLabel(c.interval_hours||12)}</span>
-        <span class="chip chip-blue">⏱ ${_nextGenerationLabel(c)}</span>
-      </div></div>`;
-  }).join("")+`<div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
+  $("chans").innerHTML=chans.map(c=>renderChanCard(c)).join("")+`<div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
     <div style="font-size:14px;font-weight:500">Новый канал</div></div>`;
+  startDashboardCountdowns();
+}
+
+function renderChanCard(c){
+  const initial=(c.title||"?").trim().charAt(0).toUpperCase()||"?";
+  const connected=!!(c.tg_chat && c.verified);
+  const handle=c.tg_chat?esc(c.tg_chat):"канал не указан";
+
+  if(!connected){
+    const hint=c.tg_chat?"Бот пока не подтверждён администратором.":"Канал ещё не подключён.";
+    return `<div class="chan-card" onclick="go('channel',${c.id})">
+      <div class="chan-card-top">
+        <div class="tg-ava">${initial}</div>
+        <div style="min-width:0">
+          <h3>${esc(c.title)}</h3>
+          <div class="chan-handle">${handle}</div>
+        </div>
+      </div>
+      <div class="chan-connect-hint">${hint} <a href="/how-to" target="_blank" rel="noopener" onclick="event.stopPropagation()">Как подключить →</a></div>
+    </div>`;
+  }
+
+  let statusLabel, dotClass, subLine;
+  if(c.auto_publish){
+    statusLabel="Автоматическая публикация"; dotClass="status-dot-green";
+    subLine=c.enabled===false?"На паузе":`⏱ Следующая генерация ${_nextGenerationLabel(c)}`;
+  } else {
+    statusLabel="Публикация после подтверждения"; dotClass="status-dot-accent";
+    subLine=c.enabled===false?"На паузе":`⏱ Следующая генерация ${_nextGenerationLabel(c)}`;
+  }
+
+  const countdownAttr=(!c.auto_publish && c.approval_deadline)
+    ? ` data-approval-countdown="${new Date(c.approval_deadline).getTime()}"` : "";
+  const sublineHtml=countdownAttr
+    ? `<div class="status-subline"${countdownAttr}>⏱ считаем…</div>`
+    : `<div class="status-subline">${esc(subLine)}</div>`;
+
+  const preview=c.next_post_preview
+    ? `<div class="chan-preview">${esc(c.next_post_preview)}</div>`
+    : `<div class="chan-preview chan-preview-empty">Очередь пуста — посты скоро появятся</div>`;
+
+  return `<div class="chan-card" onclick="go('channel',${c.id})">
+    <div class="chan-card-top">
+      <div class="tg-ava">${initial}</div>
+      <div style="min-width:0">
+        <h3>${esc(c.title)}</h3>
+        <div class="chan-handle">${handle}</div>
+      </div>
+    </div>
+    <div class="status-line"><span class="status-dot ${dotClass}"></span>${statusLabel}</div>
+    ${sublineHtml}
+    ${preview}
+    <div class="chan-foot"><span>Опубликовано: ${c.published_count}</span><span>В очереди: ${c.queue_count}</span></div>
+  </div>`;
 }
 
 // ONBOARDING — переменные используются старой полной формой (renderNewChannel),
@@ -1802,6 +1846,31 @@ function startNearestCountdown(){
     const h=Math.floor(diff/3600000),m=Math.floor((diff%3600000)/60000),sec=Math.floor((diff%60000)/1000);
     liveEl.textContent=h>0?`⏱ через ${h}ч ${m}м`:`⏱ через ${m}:${String(sec).padStart(2,"0")}`;
   },1000);
+}
+
+// Живой countdown для карточек каналов на дашборде ("публикация после
+// подтверждения" — сколько осталось до автопубликации). В отличие от
+// startNearestCountdown (очередь внутри канала, только ближайший пост),
+// здесь каналов обычно немного и у каждого свой независимый таймер —
+// тикаем все сразу одним интервалом.
+let _dashCountdownTimer=null;
+function startDashboardCountdowns(){
+  if(_dashCountdownTimer){clearInterval(_dashCountdownTimer);_dashCountdownTimer=null;}
+  if(!document.querySelector("[data-approval-countdown]")) return;
+  const tick=()=>{
+    const els=document.querySelectorAll("[data-approval-countdown]");
+    if(!els.length){clearInterval(_dashCountdownTimer);_dashCountdownTimer=null;return;}
+    els.forEach(el=>{
+      const targetMs=parseInt(el.dataset.approvalCountdown||"0",10);
+      if(!targetMs) return;
+      const diff=targetMs-Date.now();
+      if(diff<=0){el.textContent="⏱ публикуется…";return;}
+      const m=Math.floor(diff/60000),sec=Math.floor((diff%60000)/1000);
+      el.textContent=`⏱ через ${m}:${String(sec).padStart(2,"0")}, если не подтвердите`;
+    });
+  };
+  tick();
+  _dashCountdownTimer=setInterval(tick,1000);
 }
 
 function togglePostMenu(postId){

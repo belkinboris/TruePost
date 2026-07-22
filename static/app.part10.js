@@ -168,6 +168,31 @@ function startNearestCountdown(){
   },1000);
 }
 
+// Живой countdown для карточек каналов на дашборде ("публикация после
+// подтверждения" — сколько осталось до автопубликации). В отличие от
+// startNearestCountdown (очередь внутри канала, только ближайший пост),
+// здесь каналов обычно немного и у каждого свой независимый таймер —
+// тикаем все сразу одним интервалом.
+let _dashCountdownTimer=null;
+function startDashboardCountdowns(){
+  if(_dashCountdownTimer){clearInterval(_dashCountdownTimer);_dashCountdownTimer=null;}
+  if(!document.querySelector("[data-approval-countdown]")) return;
+  const tick=()=>{
+    const els=document.querySelectorAll("[data-approval-countdown]");
+    if(!els.length){clearInterval(_dashCountdownTimer);_dashCountdownTimer=null;return;}
+    els.forEach(el=>{
+      const targetMs=parseInt(el.dataset.approvalCountdown||"0",10);
+      if(!targetMs) return;
+      const diff=targetMs-Date.now();
+      if(diff<=0){el.textContent="⏱ публикуется…";return;}
+      const m=Math.floor(diff/60000),sec=Math.floor((diff%60000)/1000);
+      el.textContent=`⏱ через ${m}:${String(sec).padStart(2,"0")}, если не подтвердите`;
+    });
+  };
+  tick();
+  _dashCountdownTimer=setInterval(tick,1000);
+}
+
 function togglePostMenu(postId){
   // Закрываем все остальные открытые меню перед открытием текущего.
   document.querySelectorAll(".post-menu").forEach(el=>{

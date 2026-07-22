@@ -26,7 +26,7 @@ import tasks
 from database import (
     init_db, session,
     User, Channel, Source, Post, Payment, Referral, LandingEvent, IdempotencyKey, ProductEvent,
-    TrafficAttribution,
+    TrafficAttribution, PostApproval,
 )
 from attribution import classify_utm
 from pydantic import BaseModel as _BaseModel
@@ -460,12 +460,35 @@ def me(user: User = Depends(current_user)):
 
 # ── Каналы ────────────────────────────────────────────────────
 
-def _channel_dict(ch: Channel) -> dict:
+def _channel_dict(s, ch: Channel) -> dict:
     d = ch.model_dump()
     try:
         d["daily_times"] = json.loads(ch.daily_times or "[]")
     except Exception:
         d["daily_times"] = []
+
+    # Данные для карточки канала в кабинете: что дальше в очереди и когда
+    # опубликуется -- без этого карточка показывает только настройки, а не
+    # реальное состояние (см. редизайн кабинета).
+    next_post = s.exec(
+        select(Post).where(Post.channel_id == ch.id, Post.status == "pending")
+        .order_by(Post.created_at)
+    ).first()
+    d["next_post_preview"] = generator._clean_post(next_post.text)[:220] if next_post else None
+    d["queue_count"] = len(s.exec(
+        select(Post).where(Post.channel_id == ch.id, Post.status.in_(["pending", "scheduled"]))
+    ).all())
+    d["published_count"] = len(s.exec(
+        select(Post).where(Post.channel_id == ch.id, Post.status == "published")
+    ).all())
+
+    d["approval_deadline"] = None
+    if next_post:
+        approval = s.exec(
+            select(PostApproval).where(PostApproval.post_id == next_post.id, PostApproval.status == "waiting")
+        ).first()
+        if approval:
+            d["approval_deadline"] = approval.deadline.isoformat() + "Z"
     return d
 
 
@@ -473,7 +496,7 @@ def _channel_dict(ch: Channel) -> dict:
 def list_channels(user: User = Depends(current_user)):
     with session() as s:
         chans = s.exec(select(Channel).where(Channel.user_id == user.id)).all()
-        return [_channel_dict(c) for c in chans]
+        return [_channel_dict(s, c) for c in chans]
 
 
 class _TopicValidateIn(_BaseModel):
@@ -543,7 +566,7 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
                 existing_channel = s.get(Channel, existing_key.channel_id)
                 if existing_channel and existing_channel.about == data.about:
                     logger.info(f"create_channel: повторный client_request_id «{data.client_request_id}», about совпадает, возвращаю существующий канал {existing_channel.id}")
-                    return _channel_dict(existing_channel)
+                    return _channel_dict(s, existing_channel)
                 elif existing_channel:
                     logger.warning(
                         f"create_channel: client_request_id «{data.client_request_id}» совпал, но about отличается "
@@ -596,13 +619,13 @@ def create_channel(data: ChannelIn, user: User = Depends(current_user)):
             s.commit()
 
         logger.info(f"[create_channel] создан channel_id={ch.id} title=«{ch.title}» about=«{ch.about}» client_request_id=«{data.client_request_id}»")
-        return _channel_dict(ch)
+        return _channel_dict(s, ch)
 
 
 @app.get("/api/channels/{channel_id}")
 def get_channel(channel_id: int, user: User = Depends(current_user)):
     with session() as s:
-        return _channel_dict(_own_channel(s, channel_id, user))
+        return _channel_dict(s, _own_channel(s, channel_id, user))
 
 
 @app.patch("/api/channels/{channel_id}")
@@ -627,7 +650,7 @@ def patch_channel(channel_id: int, data: ChannelPatch, user: User = Depends(curr
         s.add(ch)
         s.commit()
         s.refresh(ch)
-        return _channel_dict(ch)
+        return _channel_dict(s, ch)
 
 
 @app.delete("/api/channels/{channel_id}")
