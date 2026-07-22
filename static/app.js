@@ -379,14 +379,6 @@ function topbar(backView,backLabel){
     </div></div>${lowBanner}${back}`;
 }
 
-function renderFooter(){
-  return `<div style="margin-top:auto;text-align:center;padding:48px 16px 24px;font-size:12px;color:var(--text-faint);line-height:1.8">
-    ИП Белкин Б.Б. · ИНН 771387918350 · ОГРНИП 324774600432188<br>
-    <a href="/legal/offer" target="_blank" style="color:var(--text-faint)">Оферта</a> &nbsp;·&nbsp;
-    <a href="/legal/privacy" target="_blank" style="color:var(--text-faint)">Конфиденциальность</a> &nbsp;·&nbsp;
-    <a href="/legal/refund" target="_blank" style="color:var(--text-faint)">Возврат</a></div>`;
-}
-
 // DASHBOARD
 function _intervalLabel(h){
   if(h<1) return `${Math.round(h*60)} мин`;
@@ -469,18 +461,14 @@ async function renderDashboard(){
         <div class="grid grid-3">
           <div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
             <div style="font-size:14px;font-weight:500">Новый канал</div></div>
-        </div>
-        <div id="dash_footer"></div></div>`;
-      const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
+        </div></div>`;
       return;
     }
     return renderQuickStart(); // новый пользователь — сразу к первому посту, без пустого дашборда
   }
   $("app").innerHTML=topbar()+`<div class="wrap">
     <div class="page-head"><h1>Твои каналы</h1><p>ИИ пишет посты сам — тебе только выбирать лучший.</p></div>
-    <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
-    <div id="dash_footer"></div></div>`;
-  const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
+    <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div></div>`;
   $("chans").innerHTML=chans.map(c=>renderChanCard(c)).join("")+`<div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
     <div style="font-size:14px;font-weight:500">Новый канал</div></div>`;
   startDashboardCountdowns();
@@ -2436,8 +2424,7 @@ async function renderBilling(){
     </div>
     <div style="text-align:center;margin-top:16px;padding-bottom:8px">
       <button class="btn-danger btn-sm" onclick="deleteAccount()" style="font-size:12px;opacity:.6">Удалить аккаунт</button>
-    </div>
-    ${renderFooter()}</div>`;
+    </div></div>`;
   try{
     const me=await api("GET","/me");const code=me.ref_code||"";
     $("ref_block").innerHTML=`

@@ -131,14 +131,6 @@ function topbar(backView,backLabel){
     </div></div>${lowBanner}${back}`;
 }
 
-function renderFooter(){
-  return `<div style="margin-top:auto;text-align:center;padding:48px 16px 24px;font-size:12px;color:var(--text-faint);line-height:1.8">
-    ИП Белкин Б.Б. · ИНН 771387918350 · ОГРНИП 324774600432188<br>
-    <a href="/legal/offer" target="_blank" style="color:var(--text-faint)">Оферта</a> &nbsp;·&nbsp;
-    <a href="/legal/privacy" target="_blank" style="color:var(--text-faint)">Конфиденциальность</a> &nbsp;·&nbsp;
-    <a href="/legal/refund" target="_blank" style="color:var(--text-faint)">Возврат</a></div>`;
-}
-
 // DASHBOARD
 function _intervalLabel(h){
   if(h<1) return `${Math.round(h*60)} мин`;

@@ -55,18 +55,14 @@ async function renderDashboard(){
         <div class="grid grid-3">
           <div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
             <div style="font-size:14px;font-weight:500">Новый канал</div></div>
-        </div>
-        <div id="dash_footer"></div></div>`;
-      const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
+        </div></div>`;
       return;
     }
     return renderQuickStart(); // новый пользователь — сразу к первому посту, без пустого дашборда
   }
   $("app").innerHTML=topbar()+`<div class="wrap">
     <div class="page-head"><h1>Твои каналы</h1><p>ИИ пишет посты сам — тебе только выбирать лучший.</p></div>
-    <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div>
-    <div id="dash_footer"></div></div>`;
-  const df=$("dash_footer");if(df) df.innerHTML=renderFooter();
+    <div class="grid grid-3" id="chans"><div class="text-faint">Загрузка…</div></div></div>`;
   $("chans").innerHTML=chans.map(c=>renderChanCard(c)).join("")+`<div class="add-card" onclick="go('new_channel')"><div class="plus">+</div>
     <div style="font-size:14px;font-weight:500">Новый канал</div></div>`;
   startDashboardCountdowns();
