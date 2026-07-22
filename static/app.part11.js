@@ -93,7 +93,7 @@ function renderSettings(){
                <input id="f_chat" value="${esc(c.tg_chat)}" placeholder="@my_channel" style="flex:1">
                <button class="btn-outline btn-sm" onclick="verifyChannel()" id="verBtn" style="white-space:nowrap">Проверить</button>
              </div>
-             <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации.</div>
+             <div class="hint">Добавь бота <b>@${esc(App.cfg?.bot_username||"…")}</b> администратором с правом публикации. <a href="/how-to" target="_blank" rel="noopener">Как это сделать →</a></div>
              <div id="verMsg" style="font-size:13px;margin-top:6px"></div>`
         }
       </label>
