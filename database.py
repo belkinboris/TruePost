@@ -3,10 +3,14 @@
 Postgres (Railway) или SQLite (локально).
 """
 
+import logging
 from datetime import datetime
 from typing import Optional
 from sqlmodel import Field, SQLModel, create_engine, Session, select
+from sqlalchemy import inspect, text
 import config
+
+logger = logging.getLogger("autopost")
 
 db_url = config.DATABASE_URL
 if db_url.startswith("postgres://"):
@@ -284,8 +288,42 @@ class IdempotencyKey(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+def _add_missing_columns():
+    """
+    Точечный самолечащийся фикс уже случившегося дрейфа схемы -- НЕ общая
+    миграционная система и не отмена правила "новая логика только через
+    новые таблицы, без ALTER TABLE на существующих". Проблема: таблица
+    postapproval была задеплоена БЕЗ колонки final_warning_sent (коммит
+    "Режим публикации после подтверждения"), а колонка добавлена в модель
+    только следующим коммитом ("Финальный буфер ~1 мин") в предположении,
+    что таблица ещё не в проде -- предположение оказалось неверным, прод
+    уже был задеплоен на тот момент. create_all() не добавляет колонки в
+    существующие таблицы, поэтому каждый запрос к PostApproval падал с
+    psycopg2.errors.UndefinedColumn -- ломая не только карточки каналов
+    (/api/channels), но и tick() (due_post_approvals), то есть весь режим
+    "публикация после подтверждения" целиком.
+
+    Идемпотентно и безопасно на повторных запусках: проверяет колонку
+    через inspector ПЕРЕД тем как пытаться её добавить.
+    """
+    try:
+        inspector = inspect(engine)
+        if "postapproval" not in inspector.get_table_names():
+            return  # таблица ещё не создана -- create_all() выше создаст её сразу с колонкой
+        existing_cols = {c["name"] for c in inspector.get_columns("postapproval")}
+        if "final_warning_sent" not in existing_cols:
+            with engine.begin() as conn:
+                conn.execute(text(
+                    "ALTER TABLE postapproval ADD COLUMN final_warning_sent BOOLEAN NOT NULL DEFAULT FALSE"
+                ))
+            logger.info("Миграция: добавлена колонка postapproval.final_warning_sent")
+    except Exception:
+        logger.exception("Миграция postapproval.final_warning_sent не удалась")
+
+
 def init_db():
     SQLModel.metadata.create_all(engine)
+    _add_missing_columns()
 
 
 def session():
