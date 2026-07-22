@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Как подключить бота АвтоПост к своему Telegram-каналу: 3 шага с картинками, без доступа к аккаунту.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://autopost.projectsozdatel.ru/how-to">
+
+  <title>Как подключить бота к каналу — АвтоПост</title>
+  <link rel="stylesheet" href="/static/landing.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>✦</text></svg>">
+
+  <style>
+    .guide-hero{max-width:800px;margin:0 auto;padding:64px 36px 8px;text-align:center}
+    .guide-hero .eyebrow{margin-left:auto;margin-right:auto}
+    .guide-hero h1{font-family:'Instrument Serif',serif;font-weight:400;font-size:52px;line-height:1.04;letter-spacing:-.02em;margin:0 0 18px}
+    .guide-hero .lead{max-width:620px;margin:0 auto 8px}
+    .guide-steps{max-width:1000px;margin:0 auto;padding:56px 36px;display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+    .guide-step{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:28px 24px;box-shadow:0 4px 20px rgba(32,24,16,.035)}
+    .guide-step .icon{width:52px;height:52px;color:var(--accent);margin-bottom:18px}
+    .guide-step .icon svg{width:100%;height:100%}
+    .guide-step .step-no{font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--faint);letter-spacing:.08em;text-transform:uppercase;margin-bottom:8px}
+    .guide-step h3{margin:0 0 10px;font-size:19px}
+    .guide-step p{margin:0 0 10px;color:var(--muted);font-size:14.5px;line-height:1.6}
+    .guide-step .tip{font-size:13px;color:var(--dark);background:var(--soft);border-radius:10px;padding:8px 12px;margin-top:12px}
+    .guide-step code{font-family:'JetBrains Mono',monospace;font-size:.92em;background:var(--soft);padding:1px 6px;border-radius:5px}
+    @media(max-width:900px){.guide-hero h1{font-size:36px}.guide-steps{grid-template-columns:1fr}}
+  </style>
+
+  <!-- Yandex.Metrika counter -->
+  <script>
+    window.YM_COUNTER_ID = 109941485;
+    (function(m,e,t,r,i,k,a){
+        m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+        m[i].l=1*new Date();
+        for (var j = 0; j < document.scripts.length; j++) {if (document.scripts[j].src === r) { return; }}
+        k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a)
+    })(window, document, 'script', 'https://mc.yandex.ru/metrika/tag.js?id=109941485', 'ym');
+    ym(109941485, 'init', {webvisor:true, clickmap:true, accurateTrackBounce:true, trackLinks:true});
+  </script>
+  <noscript><div><img src="https://mc.yandex.ru/watch/109941485" style="position:absolute; left:-9999px;" alt="" /></div></noscript>
+  <!-- /Yandex.Metrika counter -->
+</head>
+<body>
+  <header class="nav">
+    <a class="brand" href="/landing" aria-label="АвтоПост"><span>Авто</span>Пост</a>
+    <nav class="nav-links">
+      <a href="/landing#how">Как работает</a>
+      <a href="/landing#features">Возможности</a>
+      <a href="/landing#pricing">Тарифы</a>
+      <a href="/landing#faq">FAQ</a>
+    </nav>
+    <a class="nav-cta" href="/">Открыть кабинет</a>
+  </header>
+
+  <main>
+    <section class="guide-hero">
+      <div class="eyebrow">Подключение канала</div>
+      <h1>Как добавить АвтоПост в свой Telegram-канал</h1>
+      <p class="lead">Три шага, без доступа к вашему Telegram-аккаунту — только права администратора самому боту в одном конкретном канале.</p>
+    </section>
+
+    <section class="guide-steps">
+      <article class="guide-step">
+        <div class="icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="20" cy="20" r="14"/>
+            <line x1="30" y1="30" x2="42" y2="42"/>
+            <path d="M14 20l12-6-4 12-3-4-5-2z"/>
+          </svg>
+        </div>
+        <div class="step-no">Шаг 1</div>
+        <h3>Найдите бота в Telegram</h3>
+        <p>Введите <code data-bot-username>@Trpst_bot</code> в поиске Telegram или перейдите по прямой ссылке — так не перепутаете с похожим ботом.</p>
+        <a class="tip" data-bot-link href="https://t.me/Trpst_bot" style="display:inline-block;text-decoration:none">Открыть бота в Telegram →</a>
+      </article>
+
+      <article class="guide-step">
+        <div class="icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M24 6l14 5v11c0 10-6 16-14 20-8-4-14-10-14-20V11z"/>
+            <path d="M17 24l5 5 10-11"/>
+          </svg>
+        </div>
+        <div class="step-no">Шаг 2</div>
+        <h3>Добавьте его администратором канала</h3>
+        <p>В настройках канала: «Администраторы» → «Добавить администратора» → выберите бота.</p>
+        <div class="tip">Обязательно включите право <b>«Публикация сообщений»</b> — без него бот не сможет постить, даже если добавлен.</div>
+      </article>
+
+      <article class="guide-step">
+        <div class="icon" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="5" y="16" width="20" height="16" rx="8"/>
+            <path d="M13 24h6"/>
+            <circle cx="34" cy="14" r="10"/>
+            <path d="M29 14l3 3 6-6"/>
+          </svg>
+        </div>
+        <div class="step-no">Шаг 3</div>
+        <h3>Подключите канал в кабинете</h3>
+        <p>Вставьте <code>@username</code> канала или ссылку <code>t.me/...</code> в настройках канала АвтоПоста и нажмите «Проверить».</p>
+        <div class="tip">Появилась зелёная отметка «Проверено» — готово, можно генерировать первый пост.</div>
+      </article>
+    </section>
+
+    <section id="faq" class="section faq" style="max-width:800px">
+      <div class="section-head"><h2>Если что-то не получается</h2></div>
+      <details open><summary>Бот пока не найден в канале</summary><p>Проверьте, что добавили именно <span data-bot-username>@Trpst_bot</span> (а не похожего бота с похожим именем) и что после выбора прав нажали «Готово» / «Сохранить».</p></details>
+      <details><summary>Нужно ли давать боту доступ к моему Telegram-аккаунту?</summary><p>Нет. Только права администратора самому боту в конкретном канале — этого достаточно, доступ к личному аккаунту не требуется.</p></details>
+      <details><summary>Канал приватный — сработает?</summary><p>Сейчас поддерживаются публичные каналы с @username. Если канал приватный, сделайте ему публичный username в настройках Telegram — это не открывает содержимое канала всем подряд, просто даёт боту способ его найти.</p></details>
+      <details><summary>Добавил бота, а «Проверить» всё равно не проходит</summary><p>Чаще всего дело в правах — вернитесь в «Администраторы» и убедитесь, что включена именно «Публикация сообщений», а не только просмотр статистики.</p></details>
+    </section>
+
+    <section class="final-cta">
+      <h2>Готовы подключить канал?</h2>
+      <p>Дальше — тема, стиль и первый пост займут пару минут.</p>
+      <a class="btn primary" href="/">Открыть кабинет</a>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>© АвтоПост</span>
+    <a href="/legal/offer">Оферта</a>
+    <a href="/legal/privacy">Политика конфиденциальности</a>
+    <a href="/legal/refund">Возврат</a>
+  </footer>
+
+  <script>
+    fetch('/api/config').then(function(r){ return r.json(); }).then(function(cfg){
+      var name = (cfg && cfg.bot_username) || 'Trpst_bot';
+      document.querySelectorAll('[data-bot-username]').forEach(function(el){ el.textContent = '@' + name; });
+      document.querySelectorAll('[data-bot-link]').forEach(function(el){ el.href = 'https://t.me/' + name; });
+    }).catch(function(){});
+
+    (function(){
+      try {
+        var utm = (function(){
+          var params = new URLSearchParams(window.location.search);
+          return { utm_source: params.get('utm_source') || '' };
+        })();
+        fetch('/api/landing-event', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({ session_id: 'howto_' + Date.now(), event: 'howto_view', url: window.location.href, utm_source: utm.utm_source }),
+          keepalive: true
+        }).catch(function(){});
+      } catch (e) {}
+    })();
+  </script>
+</body>
+</html>

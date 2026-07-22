@@ -317,6 +317,7 @@ _ALLOWED_LANDING_EVENTS = {
     "first_post_generated",
     "channel_connected",
     "first_post_published",
+    "howto_view",
 }
 
 
@@ -1467,6 +1468,10 @@ def legal_refund():
 @app.get("/landing")
 def landing():
     return FileResponse("static/landing.html")
+
+@app.get("/how-to")
+def how_to():
+    return FileResponse("static/how-to.html")
 
 @app.get("/robots.txt")
 def robots_txt():
