@@ -1,6 +1,16 @@
 
 
-async function refreshUser(){try{App.user=await api("GET","/me");}catch(_){}}
+// КРИТИЧНО (UX fix): withTimeout() -- голый await api() здесь мог зависнуть
+// навсегда, если fetch не резолвится и не реджектится (нестабильная сеть,
+// зависшее TCP-соединение внутри Telegram Mini App WebView) -- вызывающий
+// код (renderDashboard и т.п.) тоже вис бы бесконечно на скелете загрузки
+// без единой кнопки "Попробовать снова".
+async function refreshUser(){
+  try{
+    const {timedOut, result} = await withTimeout(api("GET","/me"), 25000, "timeout");
+    if(!timedOut) App.user=result;
+  }catch(_){}
+}
 
 async function go(view,channelId){
   // Task B rule 2: все представления через go() — защищённые действия

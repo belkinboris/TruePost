@@ -248,7 +248,17 @@ function requireAuth(){
   return false;
 }
 
-async function refreshUser(){try{App.user=await api("GET","/me");}catch(_){}}
+// КРИТИЧНО (UX fix): withTimeout() -- голый await api() здесь мог зависнуть
+// навсегда, если fetch не резолвится и не реджектится (нестабильная сеть,
+// зависшее TCP-соединение внутри Telegram Mini App WebView) -- вызывающий
+// код (renderDashboard и т.п.) тоже вис бы бесконечно на скелете загрузки
+// без единой кнопки "Попробовать снова".
+async function refreshUser(){
+  try{
+    const {timedOut, result} = await withTimeout(api("GET","/me"), 25000, "timeout");
+    if(!timedOut) App.user=result;
+  }catch(_){}
+}
 
 async function go(view,channelId){
   // Task B rule 2: все представления через go() — защищённые действия
@@ -474,7 +484,13 @@ async function renderDashboard(){
   let channelsLoadFailed=false;
   const tChansStart = performance.now();
   try{
-    chans=await api("GET","/channels");
+    // withTimeout(): без него зависший (не отклонённый, не разрешённый)
+    // fetch держал бы пользователя на скелете "Загрузка…" бесконечно, без
+    // единой кнопки повтора -- ровно то, что видно как "вечная загрузка"
+    // при первом открытии Mini App на нестабильной сети.
+    const {timedOut, result} = await withTimeout(api("GET","/channels"), 25000, "timeout");
+    if(timedOut) throw new Error("Сервер долго не отвечает. Проверьте соединение.");
+    chans=result;
   }catch(e){
     channelsLoadFailed=true;
     const msg=(e&&e.message)||"";
@@ -3108,7 +3124,15 @@ async function boot(){
   try{ performance.mark('me_request_started'); }catch(_){}
   const tMeStart = performance.now();
   try{
-    App.user=await api("GET","/me");
+    // withTimeout(): та же причина что и у /channels в renderDashboard --
+    // без таймаута зависший fetch держал бы пользователя на скелете
+    // "Загружаем ваши каналы…" бесконечно, ни единой кнопки повтора.
+    // Бросаем обычный Error при таймауте -- он не совпадёт ни с одной из
+    // auth-подстрок ниже, поэтому пойдёт по ветке "временный сбой", НЕ
+    // логаутнет пользователя, покажет кнопку "Попробовать снова".
+    const {timedOut, result} = await withTimeout(api("GET","/me"), 25000, "timeout");
+    if(timedOut) throw new Error("Сервер долго не отвечает. Проверьте соединение.");
+    App.user=result;
     try{ performance.mark('me_request_finished'); }catch(_){}
     console.log(`[timing] /me: ${(performance.now()-tMeStart).toFixed(0)}ms`);
 
