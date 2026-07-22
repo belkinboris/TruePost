@@ -13,6 +13,16 @@ class AuthIn(BaseModel):
     lp_session: str = ""  # landing_session_id для CTA/Journey Diagnostics -- не сохраняется в User, только в LandingEvent/TrafficAttribution
 
 
+class TelegramMiniAppAuthIn(BaseModel):
+    init_data: str  # сырая строка window.Telegram.WebApp.initData, проверяется через security.verify_telegram_init_data
+    ref_code: str = ""
+    utm_source: str = ""
+    utm_medium: str = ""
+    utm_campaign: str = ""
+    utm_content: str = ""
+    lp_session: str = ""
+
+
 class ChannelIn(BaseModel):
     title: str
     tg_chat: str = ""

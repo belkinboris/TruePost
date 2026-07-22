@@ -140,6 +140,28 @@ class PostApproval(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class TelegramIdentity(SQLModel, table=True):
+    """
+    Связывает Telegram-пользователя (id из initData Telegram Mini App) с
+    аккаунтом АвтоПост -- позволяет войти в Mini App без email/пароля,
+    одним нажатием ("Продолжить как <имя>"), см. POST /api/auth/telegram_miniapp.
+
+    tg_user_id -- это тот же числовой id, что Telegram использует как
+    chat_id личного чата с ботом, поэтому при автосоздании аккаунта он же
+    пишется в User.tg_chat_id -- уведомления от бота-публикатора начинают
+    работать сразу, без отдельного шага "подключить Telegram" в настройках.
+
+    Новая отдельная таблица -- та же безопасная схема, что PostApproval/
+    LandingEvent/TrafficAttribution: создаётся через create_all(), без
+    ALTER TABLE на User.
+    """
+    id: Optional[int] = Field(default=None, primary_key=True)
+    tg_user_id: int = Field(index=True, unique=True)
+    user_id: int = Field(foreign_key="user.id", index=True)
+    tg_username: str = ""
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class Payment(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="user.id", index=True)

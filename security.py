@@ -65,3 +65,37 @@ def verify_token(token: str):
         return payload.get("uid")
     except Exception:
         return None
+
+
+# ── TELEGRAM MINI APP: проверка initData ─────────────────────
+# Алгоритм из официальной документации Telegram
+# (https://core.telegram.org/bots/webapps#validating-data-received-via-the-mini-app):
+#   secret_key = HMAC_SHA256(key="WebAppData", data=<bot_token>)
+#   hash       = HMAC_SHA256(key=secret_key,    data=<data_check_string>)
+# data_check_string -- все поля initData кроме hash, отсортированные по
+# ключу и склеенные как "key=value" через \n.
+
+def verify_telegram_init_data(init_data: str, bot_token: str, max_age_seconds: int = 86400):
+    """Проверяет подпись initData Telegram Mini App. При успехе возвращает
+    распарсенный dict полей (поле "user" уже раскрыто из JSON), иначе None.
+    max_age_seconds защищает от повторного использования старой, возможно
+    утёкшей initData -- Telegram переиздаёт auth_date при каждом открытии."""
+    try:
+        from urllib.parse import parse_qsl
+        data = dict(parse_qsl(init_data, strict_parsing=True))
+        received_hash = data.pop("hash", None)
+        if not received_hash:
+            return None
+        check_string = "\n".join(f"{k}={v}" for k, v in sorted(data.items()))
+        secret_key = hmac.new(b"WebAppData", bot_token.encode(), hashlib.sha256).digest()
+        computed_hash = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(computed_hash, received_hash):
+            return None
+        auth_date = int(data.get("auth_date", "0"))
+        if auth_date <= 0 or (time.time() - auth_date) > max_age_seconds:
+            return None
+        if "user" in data:
+            data["user"] = json.loads(data["user"])
+        return data
+    except Exception:
+        return None
