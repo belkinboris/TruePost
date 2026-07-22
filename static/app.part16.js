@@ -15,7 +15,7 @@ async function boot(){
   initTelegramAsync();
   initTelegram(); // если SDK уже был закэширован браузером — сработает сразу, без вреда если его ещё нет
 
-  captureLandingSession();
+  const _cameFromLanding = captureLandingSession();
 
   // КРИТИЧНО (BUG-003 fix): /config больше НЕ блокирует первый экран.
   // App.cfg используется только с ?. и фолбэками (bot_username, флаги
@@ -34,7 +34,12 @@ async function boot(){
   initCookieBanner();initKeyboardDismiss();
   if(!App.token){
     console.log(`[timing] boot() total (no token, -> renderAuth): ${(performance.now()-t0).toFixed(0)}ms`);
-    renderAuth();
+    // КРИТИЧНО (UX fix): пришедшего только что с лендинга/рекламы -- у него
+    // точно нет аккаунта -- показываем сразу форму регистрации, а не входа.
+    // Раньше ЛЮБОЙ визит без токена (и свежий с рекламы, и просто истёкшая
+    // сессия у старого пользователя) показывал форму входа по умолчанию --
+    // новый человек должен был сам заметить и нажать "Зарегистрироваться".
+    renderAuth(_cameFromLanding ? "register" : "login");
     try{ performance.mark('first_screen_visible'); performance.mark('boot_complete'); }catch(_){}
     console.log('[timing] first_screen_visible (renderAuth)');
     return;
