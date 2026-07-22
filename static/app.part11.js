@@ -53,7 +53,9 @@ function renderQueueBody(){
       </div>`
     : `<div class="card" style="background:var(--accent-soft);border:none;margin-bottom:14px;padding:14px 16px">
         <div style="font-size:13px;color:var(--accent-dark);font-weight:600">Публикация после подтверждения</div>
-        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Новый пост присылаем вам в Telegram с кнопками. Опубликуется сам через ${softControlMin} мин, если не отреагируете.</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">${App.user?.tg_chat_id
+          ? `Новый пост присылаем вам в Telegram с кнопками. Опубликуется сам через ${softControlMin} мин, если не отреагируете.`
+          : `Подтвердить или отклонить можно прямо здесь, в очереди. Опубликуется сам через ${softControlMin} мин, если не отреагируете. Подключите уведомления в Telegram, чтобы подтверждать с телефона, не заходя на сайт.`}</div>
         <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--accent-dark)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Открыть настройки</button>
       </div>`;
 
@@ -72,9 +74,21 @@ function renderQueueBody(){
 
   if(!pending.length){
     const paused = c && !c.enabled;
-    html+=paused
-      ? `<div class="empty"><div class="empty-icon">⏸</div><h3>Канал на паузе</h3><p>При возобновлении автоматически сгенерируются 3 поста.</p></div>`
-      : `<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
+    // КРИТИЧНО (fix): для неподключённого канала tick() вообще не
+    // генерирует посты (см. tasks.py: генерация идёт только для
+    // channel.verified==True) -- "посты скоро появятся автоматически"
+    // было прямой ложью в этом состоянии, ничего не появится, пока канал
+    // не подключат, сколько бы ни ждали.
+    const notConnected = c && !(c.tg_chat && c.verified);
+    if(paused){
+      html+=`<div class="empty"><div class="empty-icon">⏸</div><h3>Канал на паузе</h3><p>При возобновлении автоматически сгенерируются 3 поста.</p></div>`;
+    } else if(notConnected){
+      html+=`<div class="empty"><div class="empty-icon">📡</div><h3>Канал ещё не подключён</h3><p>Посты начнут генерироваться автоматически, как только подключите канал к Telegram.</p>
+        <button class="btn btn-sm" style="margin-top:10px" onclick="setTab('settings')">Подключить →</button>
+      </div>`;
+    } else {
+      html+=`<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
+    }
   } else {
     html+=pending.map((p)=>{
       // КРИТИЧНО (фикс путаницы из задачи): pubMs передаём ТОЛЬКО для
@@ -245,7 +259,7 @@ function renderSettings(){
     <div class="card" id="settings_automation_card">
       <div class="card-title">Автоматизация</div>
       <div class="toggle-row">
-        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала приходит вам в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать» и публикуется сам через ${App.cfg?.soft_control_minutes||30} мин, если не отреагируете.</small></div>
+        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала можно подтвердить в очереди на сайте, а если подключены уведомления — ещё и в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать». Не отреагируете — опубликуется сам через ${App.cfg?.soft_control_minutes||30} мин.</small></div>
         <label class="switch"><input type="checkbox" id="sw_auto" ${c.auto_publish?"checked":""}><span class="slider"></span></label>
       </div>
       <div class="toggle-row">

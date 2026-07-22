@@ -265,8 +265,20 @@ async def generate_for_channel(channel_id: int, topic: str = "", force_pending: 
         # "Публикация после подтверждения": канал не в автопилоте, это
         # регулярная генерация по расписанию (не ручной запрос из
         # приложения и не догенерация резерва очереди -- обе всегда
-        # приходят с force_pending=True), и есть куда слать личку.
-        needs_approval = (not channel.auto_publish) and (not force_pending) and post.status == "pending" and bool(user.tg_chat_id)
+        # приходят с force_pending=True).
+        #
+        # КРИТИЧНО (fix): раньше здесь ещё стояло bool(user.tg_chat_id) --
+        # без подключённых личных уведомлений в Telegram запись PostApproval
+        # вообще не заводилась, а значит и таймер на 30 минут (весь смысл
+        # режима "публикация после подтверждения") никогда не запускался.
+        # Пост просто вечно висел в очереди как pending, хотя интерфейс
+        # везде обещает "опубликуется сам через 30 мин, если не
+        # отреагируете" -- обещание было ложным для любого пользователя без
+        # подключённых уведомлений. Теперь таймер заводится всегда;
+        # Telegram-карточка (см. _send_approval_card) -- лишь опциональный
+        # дополнительный канал подтверждения поверх него, подтвердить или
+        # отклонить всегда можно и на сайте, независимо от Telegram.
+        needs_approval = (not channel.auto_publish) and (not force_pending) and post.status == "pending"
         approval_chat_id = user.tg_chat_id
         approval_channel_id = channel_id
 
@@ -407,19 +419,34 @@ async def _render_approval_card(chat_id: int, message_id: Optional[int], post_id
     return await telegram_api.send_dm_with_keyboard(chat_id, card_text, keyboard)
 
 
-async def _send_approval_card(post_id: int, channel_id: int, chat_id: int, channel_title: str, post_text: str):
-    """Первая отправка карточки для только что сгенерированного поста --
-    заводит дедлайн и запись PostApproval."""
+async def _send_approval_card(post_id: int, channel_id: int, chat_id: Optional[int], channel_title: str, post_text: str):
+    """
+    Заводит дедлайн и запись PostApproval для поста в режиме "публикация
+    после подтверждения" -- ВСЕГДА, вне зависимости от того, подключены ли
+    у пользователя личные уведомления в Telegram (chat_id может быть None).
+    Карточка в Telegram -- опциональный дополнительный канал подтверждения
+    поверх этого таймера, не обязательное условие для его работы:
+    подтвердить/отклонить/отредактировать всегда можно и на сайте, через
+    обычную очередь (см. /api/posts/{id}/publish и cancel_pending_approval).
+
+    review_chat_id=0 -- сентинел "нет Telegram-карточки" (0 не может быть
+    настоящим chat_id) вместо NULL, чтобы не менять тип существующей
+    NOT NULL колонки на уже задеплоенной таблице.
+    """
     deadline = datetime.utcnow() + timedelta(minutes=config.SOFT_CONTROL_APPROVAL_MINUTES)
-    result = await _render_approval_card(chat_id, None, post_id, channel_title, post_text, deadline)
-    if not result.get("ok"):
-        logger.warning(f"approval card для поста {post_id}: не удалось отправить, {result.get('description')}")
-        return
-    message_id = result["result"].get("message_id")
+    review_chat_id = 0
+    review_message_id = None
+    if chat_id:
+        result = await _render_approval_card(chat_id, None, post_id, channel_title, post_text, deadline)
+        if result.get("ok"):
+            review_chat_id = chat_id
+            review_message_id = result["result"].get("message_id")
+        else:
+            logger.warning(f"approval card для поста {post_id}: не удалось отправить, {result.get('description')}")
     with session() as s:
         s.add(PostApproval(
             post_id=post_id, channel_id=channel_id,
-            review_chat_id=chat_id, review_message_id=message_id,
+            review_chat_id=review_chat_id, review_message_id=review_message_id,
             deadline=deadline,
         ))
         s.commit()

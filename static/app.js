@@ -745,7 +745,7 @@ function renderNewChannelSettings(){
 
     <div class="card mt">
       <div class="toggle-row">
-        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала приходит вам в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать» и публикуется сам через ${App.cfg?.soft_control_minutes||30} мин, если не отреагируете.</small></div>
+        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала можно подтвердить в очереди на сайте, а если подключены уведомления — ещё и в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать». Не отреагируете — опубликуется сам через ${App.cfg?.soft_control_minutes||30} мин.</small></div>
         <label class="switch"><input type="checkbox" id="ncs_auto"><span class="slider"></span></label>
       </div>
     </div>
@@ -1762,9 +1762,15 @@ async function renderChannel(){
   // при редизайне карточек.
   const initial=(c.title||"?").trim().charAt(0).toUpperCase()||"?";
   const connected=!!(c.tg_chat && c.verified);
-  let statusLabel, dotClass;
+  // КРИТИЧНО (UX fix): раньше "канал не подключён" повторялся трижды на
+  // экране одновременно -- баннер выше, статус-строка и подпись хэндла.
+  // Когда tg_chat вообще не указан, баннер notConnected уже показывает это
+  // с явной кнопкой "Подключить →" -- статус-строку в этом случае не
+  // дублируем, оставляем только для промежуточного состояния "бот добавлен,
+  // но ещё не подтверждён" (у него своего баннера нет).
+  let statusLabel="", dotClass="status-dot-gray";
   if(!connected){
-    statusLabel=c.tg_chat?"Бот пока не подтверждён администратором":"Канал не подключён"; dotClass="status-dot-gray";
+    if(c.tg_chat) statusLabel="Бот пока не подтверждён администратором";
   } else if(c.auto_publish){
     statusLabel="Автоматическая публикация"; dotClass="status-dot-green";
   } else {
@@ -1779,10 +1785,10 @@ async function renderChannel(){
         <div class="tg-ava" style="width:52px;height:52px;font-size:22px">${esc(initial)}</div>
         <div style="min-width:0">
           <h2 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">${esc(c.title)}</h2>
-          <div class="chan-handle">${c.tg_chat?esc(c.tg_chat):"канал не указан"}</div>
+          <div class="chan-handle">${c.tg_chat?esc(c.tg_chat):'<span style="color:var(--text-faint);font-style:italic;font-weight:400">канал будет указан после подключения</span>'}</div>
         </div>
       </div>
-      <div class="status-line"><span class="status-dot ${dotClass}"></span>${statusLabel}</div>
+      ${statusLabel?`<div class="status-line"><span class="status-dot ${dotClass}"></span>${statusLabel}</div>`:""}
       ${subLine?`<div class="status-subline">${subLine}</div>`:""}
       ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:10px;max-width:500px">${esc(c.about)}</p>`:""}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
@@ -2066,7 +2072,9 @@ function renderQueueBody(){
       </div>`
     : `<div class="card" style="background:var(--accent-soft);border:none;margin-bottom:14px;padding:14px 16px">
         <div style="font-size:13px;color:var(--accent-dark);font-weight:600">Публикация после подтверждения</div>
-        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">Новый пост присылаем вам в Telegram с кнопками. Опубликуется сам через ${softControlMin} мин, если не отреагируете.</div>
+        <div style="font-size:13px;color:var(--text-dim);margin-top:2px">${App.user?.tg_chat_id
+          ? `Новый пост присылаем вам в Telegram с кнопками. Опубликуется сам через ${softControlMin} мин, если не отреагируете.`
+          : `Подтвердить или отклонить можно прямо здесь, в очереди. Опубликуется сам через ${softControlMin} мин, если не отреагируете. Подключите уведомления в Telegram, чтобы подтверждать с телефона, не заходя на сайт.`}</div>
         <button class="btn-ghost btn-sm" style="margin-top:6px;padding:4px 0;color:var(--accent-dark)" onclick="setTab('settings');setTimeout(()=>{const el=document.getElementById('settings_automation_card');if(el) el.scrollIntoView({behavior:'smooth',block:'center'});},100)">Открыть настройки</button>
       </div>`;
 
@@ -2085,9 +2093,21 @@ function renderQueueBody(){
 
   if(!pending.length){
     const paused = c && !c.enabled;
-    html+=paused
-      ? `<div class="empty"><div class="empty-icon">⏸</div><h3>Канал на паузе</h3><p>При возобновлении автоматически сгенерируются 3 поста.</p></div>`
-      : `<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
+    // КРИТИЧНО (fix): для неподключённого канала tick() вообще не
+    // генерирует посты (см. tasks.py: генерация идёт только для
+    // channel.verified==True) -- "посты скоро появятся автоматически"
+    // было прямой ложью в этом состоянии, ничего не появится, пока канал
+    // не подключат, сколько бы ни ждали.
+    const notConnected = c && !(c.tg_chat && c.verified);
+    if(paused){
+      html+=`<div class="empty"><div class="empty-icon">⏸</div><h3>Канал на паузе</h3><p>При возобновлении автоматически сгенерируются 3 поста.</p></div>`;
+    } else if(notConnected){
+      html+=`<div class="empty"><div class="empty-icon">📡</div><h3>Канал ещё не подключён</h3><p>Посты начнут генерироваться автоматически, как только подключите канал к Telegram.</p>
+        <button class="btn btn-sm" style="margin-top:10px" onclick="setTab('settings')">Подключить →</button>
+      </div>`;
+    } else {
+      html+=`<div class="empty"><div class="empty-icon">✦</div><h3>Очередь пуста</h3><p>Посты скоро появятся автоматически.</p></div>`;
+    }
   } else {
     html+=pending.map((p)=>{
       // КРИТИЧНО (фикс путаницы из задачи): pubMs передаём ТОЛЬКО для
@@ -2258,7 +2278,7 @@ function renderSettings(){
     <div class="card" id="settings_automation_card">
       <div class="card-title">Автоматизация</div>
       <div class="toggle-row">
-        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала приходит вам в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать» и публикуется сам через ${App.cfg?.soft_control_minutes||30} мин, если не отреагируете.</small></div>
+        <div class="toggle-info"><b>Публиковать без проверки</b><small>Если включено — новые посты выходят в канал автоматически по расписанию. Если выключено — каждый новый пост сначала можно подтвердить в очереди на сайте, а если подключены уведомления — ещё и в Telegram с кнопками «Опубликовать», «Отклонить», «Редактировать». Не отреагируете — опубликуется сам через ${App.cfg?.soft_control_minutes||30} мин.</small></div>
         <label class="switch"><input type="checkbox" id="sw_auto" ${c.auto_publish?"checked":""}><span class="slider"></span></label>
       </div>
       <div class="toggle-row">

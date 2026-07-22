@@ -166,9 +166,15 @@ async function renderChannel(){
   // при редизайне карточек.
   const initial=(c.title||"?").trim().charAt(0).toUpperCase()||"?";
   const connected=!!(c.tg_chat && c.verified);
-  let statusLabel, dotClass;
+  // КРИТИЧНО (UX fix): раньше "канал не подключён" повторялся трижды на
+  // экране одновременно -- баннер выше, статус-строка и подпись хэндла.
+  // Когда tg_chat вообще не указан, баннер notConnected уже показывает это
+  // с явной кнопкой "Подключить →" -- статус-строку в этом случае не
+  // дублируем, оставляем только для промежуточного состояния "бот добавлен,
+  // но ещё не подтверждён" (у него своего баннера нет).
+  let statusLabel="", dotClass="status-dot-gray";
   if(!connected){
-    statusLabel=c.tg_chat?"Бот пока не подтверждён администратором":"Канал не подключён"; dotClass="status-dot-gray";
+    if(c.tg_chat) statusLabel="Бот пока не подтверждён администратором";
   } else if(c.auto_publish){
     statusLabel="Автоматическая публикация"; dotClass="status-dot-green";
   } else {
@@ -183,10 +189,10 @@ async function renderChannel(){
         <div class="tg-ava" style="width:52px;height:52px;font-size:22px">${esc(initial)}</div>
         <div style="min-width:0">
           <h2 style="font-family:'Instrument Serif',serif;font-size:26px;font-weight:400">${esc(c.title)}</h2>
-          <div class="chan-handle">${c.tg_chat?esc(c.tg_chat):"канал не указан"}</div>
+          <div class="chan-handle">${c.tg_chat?esc(c.tg_chat):'<span style="color:var(--text-faint);font-style:italic;font-weight:400">канал будет указан после подключения</span>'}</div>
         </div>
       </div>
-      <div class="status-line"><span class="status-dot ${dotClass}"></span>${statusLabel}</div>
+      ${statusLabel?`<div class="status-line"><span class="status-dot ${dotClass}"></span>${statusLabel}</div>`:""}
       ${subLine?`<div class="status-subline">${subLine}</div>`:""}
       ${c.about?`<p style="font-size:13px;color:var(--text-dim);margin-top:10px;max-width:500px">${esc(c.about)}</p>`:""}
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
