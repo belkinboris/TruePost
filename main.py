@@ -1316,6 +1316,26 @@ def delete_account(user: User = Depends(current_user)):
     except Exception as e:
         _fail("чтение channels", e)
 
+    # КРИТИЧНО (настоящий root cause красной всплывашки): PostApproval
+    # (режим "публикация после подтверждения") хранит настоящий FK
+    # post_id -> post.id (unique) и channel_id -> channel.id. Она создаётся
+    # для КАЖДОГО поста в режиме auto_publish=False (это основной сценарий
+    # после фикса soft-control этой же сессии) -- то есть у любого активного
+    # пользователя почти наверняка есть такие строки. Без очистки ДО
+    # удаления Post ниже падает ForeignKeyViolation
+    # "postapproval_post_id_fkey" -- именно тот 500, который видит
+    # пользователь (этот шаг не имеет fallback, в отличие от шага 7).
+    approvals_count = 0
+    try:
+        with session() as s:
+            for ch in chans:
+                for pa in s.exec(select(PostApproval).where(PostApproval.channel_id == ch.id)).all():
+                    s.delete(pa); approvals_count += 1
+            s.commit()
+            logger.info(f"{log_prefix} шаг 1.5: удалены PostApproval={approvals_count}")
+    except Exception as e:
+        _fail("удаление PostApproval", e)
+
     posts_count = sources_count = rules_count = 0
     try:
         with session() as s:
@@ -1416,6 +1436,22 @@ def delete_account(user: User = Depends(current_user)):
         # НЕ критично само по себе как шаг, НО если эта очистка не сработала
         # (например другая ошибка), то шаг 7 (удаление User) ниже всё равно
         # упадёт с тем же FK violation -- лог покажет это явно на шаге 7.
+
+    # КРИТИЧНО (тот же класс бага, что и IdempotencyKey выше): TelegramIdentity
+    # (добавлена для one-tap входа в Mini App через /start) хранит настоящий
+    # FK user_id -> user.id. Без очистки удаление User с привязанным Telegram
+    # id падает с тем же ForeignKeyViolation, что раньше был на IdempotencyKey.
+    # LandingEvent/ProductEvent/TrafficAttribution намеренно без FK (см. их
+    # докстринги) -- их чистить не нужно.
+    try:
+        with session() as s:
+            removed = 0
+            for ti in s.exec(select(TelegramIdentity).where(TelegramIdentity.user_id == uid)).all():
+                s.delete(ti); removed += 1
+            s.commit()
+            logger.info(f"{log_prefix} шаг 6.6: TelegramIdentity очищены ДО удаления User: {removed}")
+    except Exception as e:
+        logger.warning(f"{log_prefix} шаг 6.6 (TelegramIdentity) не удался: exception_type={type(e).__name__} repr={repr(e)} orig={repr(getattr(e, 'orig', None))}")
 
     try:
         with session() as s:
